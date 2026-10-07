@@ -100,6 +100,9 @@ def main():
                "brief": a.id if (a.brief or ch.get("brief")) else None, "seeds": ch.get("seeds", []),
                "exam": exam or ch.get("exam"), "bank": bank or ch.get("bank", [])})
     ch.setdefault("emblem", pick_emblem(index, a.id))
+    if "mission" not in ch:  # rotate hunt / escort / reach within the realm so every map has a mix
+        n = sum(1 for c in index["chapters"] if c["realm"] == ch["realm"] and c["id"] != a.id)
+        ch["mission"] = ["hunt", "escort", "reach"][n % 3]
 
     chpath = os.path.join(DOCS, "data", "ch", a.id + ".json")
     prev = json.load(open(chpath)) if os.path.exists(chpath) else {"cards": {}, "brief": None}

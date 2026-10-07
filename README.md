@@ -38,6 +38,22 @@ A **chapter** is one lecture: a node on a realm's map. Heroes, orbs and the shar
 Adding a block: add a world entry to `index.json`, then `tools/add_realm.py --world <id> --name "..."` for each map,
 then `tools/add_chapter.py --realm <index> ...` for each lecture.
 
+## Mechanics added after the move
+
+- **Missions.** Each lecture's first battle has a mission (`chapter.mission`: `hunt`, `escort` or `reach`, rotated by
+  `add_chapter.py` so every map has a mix). Grading, report and chest are unchanged; the mission adds a bonus to the
+  chest. Escort: a courier walks two tiles east per turn, foes beside her raid (the nearest hero answers; a miss costs her
+  a heart); delivered alive = 2 + hearts bonus orbs. Reach: a banner behind enemy lines; a hero standing on it at the end
+  of a turn within 6 turns = 4 orbs (5 if by turn 4). Rematches and skirmishes are always hunts.
+- **Boss** (`world.boss`: hero id, name, hp, el). Opens when half the world's battles are cleared. Duel screen: pick a
+  hero → question → hit (damage by role: Striker/Caster 3, Ranger/Flyer/Vanguard 2, Healer 1; +1 if the hero's element
+  is in `BOSS_WEAK[boss.el]`; Ranger staggers, Vanguard arms, Healer heals). A miss is countered: a parry question.
+  Below half HP the boss is enraged (two strikes a round, 1.5 hearts). First win: ◆ 30 and the boss joins the roster;
+  later wins ◆ 10 once a week (`S.boss[worldId]`).
+- **Home element** (`realmInfo[r].el`): heroes of that element earn 30 exp per hit instead of 20 and their skill
+  cooldown drops an extra turn on each correct answer there.
+- **Signatures** (`SIG` in app.js, keyed `role|element`): one intended combo per pair, covering all 60 heroes.
+
 ## How the data loads
 
 `app.js` fetches `data/index.json` first, then every chapter whose realm is listed in `index.preload`.

@@ -29,6 +29,8 @@ function worldById(id){ return WORLDS.find(w => w.id === id) || WORLDS[0]; }
 function curWorld(){ return worldById(V.world || (S && S.world)); }
 function worldRealms(w){ return w.realms.concat(PACKR >= 0 ? [PACKR] : []); }
 function villagePos(r){ return RI[r] && RI[r].village; }
+function homeEl(r){ return (RI[r] && RI[r].el) || null; }
+function atHome(u){ return !!(B && B.c && u.el && homeEl(B.c.realm) === u.el); }
 function villageAll(r){ return !!(RI[r] && RI[r].villageAll); }
 function worldChapters(w){ return D.chapters.filter(c => !c.imported && w.realms.includes(c.realm)); }
 function worldState(w){ const chs = worldChapters(w).filter(c => c.exam); return {n: chs.filter(c => chapStatus(c).cls === "clear").length, of: chs.length}; }
@@ -54,6 +56,45 @@ const SKILL = {
   C:{n:"Focus", cd:3, d:"Its next question gets 30 extra seconds and a miss costs no heart"},
   H:{n:"Mend", cd:3, d:"Heal any hero by 1 heart", t:"ally"}
 };
+/* signatures: one intended combo line per role-and-element pair, so a hero's skill and element work together */
+const SIG = {
+  "V|Fire":{n:"Molten Plate", d:"When its armor blocks a hit, a BURN tile appears under the attacker"},
+  "V|Ice":{n:"Rime", d:"When its armor blocks a hit, the attacker is stunned"},
+  "V|Nature":{n:"Thick Hide", d:"When its armor blocks a hit, it heals half a heart"},
+  "V|Sand":{n:"Hourglass Guard", d:"When its armor blocks a hit, the next question gets 15 extra seconds"},
+  "V|Shadow":{n:"Vengeance", d:"When its armor blocks a hit, Taunt recharges by a turn"},
+  "V|Storm":{n:"Static Shell", d:"When its armor blocks a hit, the nearest other foe is stunned"},
+  "V|Steam":{n:"Overclock", d:"When its armor blocks a hit, it salvages an orb"},
+  "V|Light":{n:"Bulwark", d:"Its armor is back up at the start of every turn"},
+  "V|Earth":{n:"Bedrock", d:"A tile it moves with Earthshaper gets its full 5 turns back"},
+  "S|Shadow":{n:"Ambush", d:"Its second attack under Adrenaline or Shadowstep gets 15 extra seconds"},
+  "S|Fire":{n:"Blaze", d:"Its BURN tiles last 2 turns longer"},
+  "S|Nature":{n:"Spore Burst", d:"Acting a second time under Adrenaline heals it half a heart"},
+  "S|Earth":{n:"Bedrock", d:"A tile it moves with Earthshaper gets its full 5 turns back"},
+  "S|Water":{n:"Riptide", d:"Its Tide pushes foes one tile further"},
+  "S|Sand":{n:"Mirage", d:"Its Hourglass gives 10 more seconds"},
+  "C|Ice":{n:"Permafrost", d:"Its ICE tiles last 2 turns longer"},
+  "C|Shadow":{n:"Dread", d:"A correct answer while Focused also stuns the nearest foe"},
+  "C|Water":{n:"Undertow", d:"Its Tide pushes foes two tiles further"},
+  "C|Steam":{n:"Boiler", d:"Its Salvage drops 2 orbs"},
+  "C|Light":{n:"Starfall", d:"Its WARD tiles last twice as long"},
+  "C|Nature":{n:"Verdance", d:"A hero healed by its HEAL tile also gains armor"},
+  "C|Sand":{n:"Mirage", d:"Its Hourglass gives 10 more seconds"},
+  "H|Nature":{n:"Overgrowth", d:"Mend also leaves a HEAL tile under the ally"},
+  "H|Light":{n:"Radiance", d:"Mend also gives the ally armor"},
+  "H|Sand":{n:"Sands of Time", d:"Mend also gives the next question 15 extra seconds"},
+  "F|Storm":{n:"Thunderdive", d:"Rescue also stuns the foe nearest to where it lands"},
+  "F|Light":{n:"Skyguard", d:"The ally it swaps with by Rescue gains armor"},
+  "F|Ice":{n:"Skyguard", d:"The ally it swaps with by Rescue gains armor"},
+  "F|Steam":{n:"Skyguard", d:"The ally it swaps with by Rescue gains armor"},
+  "R|Fire":{n:"Fuse", d:"Pin down also leaves a BURN tile under the foe"},
+  "R|Nature":{n:"Longshot", d:"Pin down reaches 4 tiles and lasts two enemy phases"},
+  "R|Steam":{n:"Longshot", d:"Pin down reaches 4 tiles and lasts two enemy phases"},
+  "R|Sand":{n:"Longshot", d:"Pin down reaches 4 tiles and lasts two enemy phases"}
+};
+function sigOf(x){ const hr = x && x.hid ? HERO[x.hid] : x; return hr ? SIG[hr.role + "|" + hr.el] || null : null; }
+function sigIs(u, name){ const g = sigOf(u); return !!(g && g.n === name); }
+function stunNear(p, exclude, n){ const o = liveFoes().filter(x => x !== exclude && !x.stun).sort((a, b) => md(a, p) - md(b, p))[0]; if (o) { o.stun = Math.max(o.stun || 0, n || 1); fx(o.x, o.y, "STUN", "shock"); return o; } return null; }
 function isElite(cid){ return hash(cid + "|elite") % 5 === 0; }
 const TILE = {Fire:"burn", Ice:"frost", Nature:"bloom", Light:"ward"};
 const TILEINFO = {burn:["BURN", "A foe on it cannot attack"], frost:["ICE", "Foes cannot pass"], bloom:["HEAL", "Heals a hero standing here at the start of your turn"], ward:["WARD", "Blocks the next hit on a hero standing here"]};
@@ -61,6 +102,12 @@ const FX = {Storm:["SHOCK", "Stuns the nearest other foe, which skips the next e
   Shadow:["SHADOWSTEP", "After its own attack: swap places with any foe you click, then attack again that turn"], Earth:["EARTHSHAPER", "After its own attack: pick up any tile on the field and put it down on any square"], Steam:["SALVAGE", "Every correct answer has a 1 in 4 chance of dropping an orb"]};
 function elName(el){ return TILE[el] ? TILEINFO[TILE[el]][0] + " tile" : FX[el] ? FX[el][0] : ""; }
 function elDesc(el){ return TILE[el] ? TILEINFO[TILE[el]][1] : FX[el] ? FX[el][1] : ""; }
+const MISSION = {
+  hunt:{n:"Hunt", d:"Defeat every foe. The last one standing is the chapter boss."},
+  escort:{n:"Escort", d:"A courier walks two tiles east each turn. Foes next to her raid: your nearest hero must answer or she loses a heart. Deliver her alive for bonus orbs.", hp:3, row:3, speed:2},
+  reach:{n:"Reach", d:"Plant a hero on the banner behind enemy lines before the turn limit for bonus orbs.", turns:6}
+};
+function missionOf(c){ return (B && B.rematch) || !c || !c.exam ? "hunt" : (c.mission || "hunt"); }
 const RESK_MS = 2 * 3600 * 1000, REALM_PRIZE = r => Math.max(15, 5 * r);
 const DIRS = [[1,0],[-1,0],[0,1],[0,-1]];
 const root = ROOT;
@@ -87,13 +134,13 @@ const MIGRATIONS = {
   3: s => { s.v = 4; s.meta = {created: s.meta && s.meta.created || Date.now(), site: 1}; return s; }
 };
 function upgrade(x){ if (!x || typeof x.v !== "number" || x.v < 3 || x.v > SAVE_V) return null; while (x.v < SAVE_V) { const m = MIGRATIONS[x.v]; if (!m) return null; x = m(x); } return x; }
-function fresh(){ return {v:SAVE_V, meta:{created:Date.now(), site:1}, cards:{}, orbs:60, heroes:{}, team:[], exams:{}, stats:{ans:0, ok:0}, sk:0, pulls:0, fallen:[], skw:{}, rem:{}, rsk:{}, rw:{}, vil:{}, vx:{}, gifts:{}, started:false}; }
+function fresh(){ return {v:SAVE_V, meta:{created:Date.now(), site:1}, cards:{}, orbs:60, heroes:{}, team:[], exams:{}, stats:{ans:0, ok:0}, sk:0, pulls:0, fallen:[], skw:{}, rem:{}, rsk:{}, rw:{}, vil:{}, vx:{}, gifts:{}, boss:{}, started:false}; }
 function migrate(x){ const s = fresh(); s.cards = x.cards || {}; s.sk = x.sk || 0; return s; }
 function load(){
   let s = null;
   try { s = upgrade(JSON.parse(localStorage.getItem(KEY) || "null")); } catch (e) {}
   if (!s) s = fresh();
-  for (const k of ["cards", "heroes", "exams", "skw", "rem", "rsk", "rw", "vil", "vx", "gifts"]) s[k] = s[k] || {};
+  for (const k of ["cards", "heroes", "exams", "skw", "rem", "rsk", "rw", "vil", "vx", "gifts", "boss"]) s[k] = s[k] || {};
   s.team = s.team || []; s.fallen = s.fallen || []; s.stats = s.stats || {ans:0, ok:0};
   if (!s.started) { D.starters.forEach(id => { if (!s.heroes[id]) s.heroes[id] = {exp:0, mg:0}; }); s.started = true; }
   return s;
@@ -263,6 +310,13 @@ function topbar(){
   ]);
 }
 function leaveTo(k){ if (B) { if (Q && Q.timer) clearInterval(Q.timer); save(); B = null; Q = null; } go(k); }
+function bossPanel(w){
+  const bz = bossOf(w); if (!bz) return null; const st = worldState(w), need = Math.ceil(st.of / 2), open = bossUnlocked(w), r = S.boss[w.id] || {n:0, wins:0, last:0}, weekly = r.wins && Date.now() - (r.last || 0) < BOSS_WEEK;
+  return h("div", {class:"chap bossrow"}, [h("img", {src:HERO[bz.hero].img, alt:""}), h("div", {}, [
+    h("div", {class:"nm"}, ["Boss: " + bz.name, h("span", {class:"tag " + (open ? (r.wins ? "" : "r") : "d"), text: r.wins ? "Defeated ×" + r.wins : open ? "Open" : "Locked"})]),
+    h("div", {class:"muted", text: open ? "A duel of champions: your team of four against " + bz.name + ". Every correct answer is a blow; every miss invites a strike you must parry. First victory recruits the boss as a legendary hero and pays ◆ 30; later victories pay ◆ 10 once a week." + (weekly ? " Weekly chest taken; next in " + waitText(BOSS_WEEK - (Date.now() - r.last)) + "." : "") : "Clear " + need + " of this chapter's " + st.of + " battles to challenge the boss (" + st.n + " so far)."}),
+    h("div", {class:"row"}, [h("button", {class:"go", text:"Challenge " + bz.name.split(",")[0], disabled:!open, on:{click:() => startBoss(w)}})])])]);
+}
 function emblemChip(c){ const hr = HERO[c.emblem]; return h("span", {class:"emb", title:hr.n + ", " + hr.c}, [h("img", {src:hr.img, alt:""}), h("span", {text: (S.skw[c.id] ? "Recruited: " : "Emblem: ") + hr.n})]); }
 function chapStatus(c){
   const ex = exam(c), p = pool(c);
@@ -276,7 +330,8 @@ function world(){
   box.appendChild(h("div", {class:"row"}, wr.filter(i => D.realms[i]).map(i => h("button", {class:V.realm === i ? "on" : "", text:D.realms[i], on:{click:() => go("world", {realm:i, focus:null})}}))));
   if (!W.realms.length && V.realm === PACKR) box.appendChild(h("div", {class:"chap"}, [h("div", {class:"nm", text:"Nothing here yet"}), h("div", {class:"muted", text:"Maps for this chapter appear as lectures are added. Guild packs are available everywhere."})]));
   if (realmNote) { box.appendChild(h("div", {class:"fb", text:realmNote})); realmNote = ""; }
-  if (V.realm !== PACKR) { const rs = realmState(V.realm); if (rs.of) box.appendChild(h("div", {class:"pixs", text: S.rw[V.realm] ? "Realm cleared. ◆ " + rs.prize + " collected." : rs.n + " of " + rs.of + " battles cleared (green). Clear them all for ◆ " + rs.prize + "."})); }
+  if (V.realm !== PACKR && W.realms.length && W.realms[0] === V.realm) { const bp = bossPanel(W); if (bp) box.appendChild(bp); }
+  if (V.realm !== PACKR) { const rs = realmState(V.realm), he = homeEl(V.realm); if (rs.of) box.appendChild(h("div", {class:"pixs", text: (S.rw[V.realm] ? "Realm cleared. ◆ " + rs.prize + " collected." : rs.n + " of " + rs.of + " battles cleared (green). Clear them all for ◆ " + rs.prize + ".") + (he ? " Home element: " + he + ". " + he + " heroes earn half again as much experience here and their skills recharge a turn faster." : "")})); }
   const map = h("div", {class:"wmap", role:"group", "aria-label":"World map"}); map.style.backgroundImage = "url(" + ((RI[V.realm] && RI[V.realm].map) || "m/map1.jpg") + ")";
   const chs = D.chapters.filter(c => c.realm === V.realm);
   if (V.realm === PACKR) chs.slice().sort((x, y) => x.id < y.id ? -1 : 1).forEach((c, i) => { c.pos = [14 + (i % 5) * 18, 24 + (Math.floor(i / 5) % 4) * 17]; });
@@ -307,8 +362,8 @@ function world(){
       : done && !chestOpen(c) ? "Chest locked. Paste the report into the chat; the debrief ends with the code."
       : st.p.length ? (S.skw[c.id] ? "Skirmish cleared. Re-skirmishes and rematches pay a few orbs." : "Clear every missed question, and every one you flagged unsure or guessed, in one skirmish to recruit the emblem hero.") : (done && chestOpen(c) ? "No misses or flags. A rematch is open." : "No misses or flags. Nothing left to fight here.");
     box.appendChild(h("div", {class:"chap" + (V.focus === c.id ? " focus" : ""), id:"ch-" + c.id}, [
-      h("div", {class:"nm"}, [c.name, h("span", {class:"tag " + st.tag[1], text:st.tag[0]})]),
-      h("div", {class:"muted", text:sub}),
+      h("div", {class:"nm"}, [c.name, c.exam && (c.mission || "hunt") !== "hunt" ? h("span", {class:"tag d", text:MISSION[c.mission].n}) : null, h("span", {class:"tag " + st.tag[1], text:st.tag[0]})]),
+      h("div", {class:"muted", text:(c.exam && !done && (c.mission || "hunt") !== "hunt" ? MISSION[c.mission].d + " " : "") + sub}),
       h("div", {class:"row"}, btns)]));
   });
   const lk = D.locked.filter(c => c.realm === V.realm);
@@ -372,6 +427,9 @@ function newBattle(mode, c, ids, queue, rex){
   B = {mode, c, ids, queue, rematch:!!rex, extra:0, pend:null, vil: mode === "village" ? {x:VIL.x, y:VIL.y} : null, vhp:VIL.hearts, breach:0, drops:0, t0:Date.now(),
     ex: rex || (mode === "exam" ? S.exams[c.id] : null), units:mkUnits(mode), foes:[], tiles:[], turn:1, phase:"player", sel:null, busy:false, paused:false, log:[], cleared:{}, fell:[], el:null, used:new Set()};
   B.units.forEach(u => B.used.add(u.hid));
+  B.mission = mode === "exam" && !rex ? (c.mission || "hunt") : "hunt";
+  if (B.mission === "escort") B.esc = {x:0, y:MISSION.escort.row, hp:MISSION.escort.hp, done:false, dead:false};
+  if (B.mission === "reach") { const r0 = rng(hash(c.id + "|goal")); B.goal = {x:COLS - 1, y:1 + Math.floor(r0() * (ROWS - 2)), done:0, limit:MISSION.reach.turns}; }
   if (mode === "village") spawnWave(VIL.wave); else spawnMore();
   go("battle"); banner(mode === "village" ? "Round 1 of " + VIL.rounds : "Turn 1");
 }
@@ -436,11 +494,13 @@ function tide(f, steps){
 }
 function applyEl(u, f, enemy){
   const el = u.el, big = u.role === "C";
-  if (TILE[el]) { if (tileAt(f.x, f.y)) return ""; B.tiles.push({x:f.x, y:f.y, k:TILE[el], ttl: big ? 5 : 3}); fx(f.x, f.y, TILEINFO[TILE[el]][0], TILE[el]); return " " + TILEINFO[TILE[el]][0] + " tile left behind."; }
+  if (TILE[el]) { if (tileAt(f.x, f.y)) return ""; let ttl = big ? 5 : 3; const g = sigOf(u);
+    if (g && (g.n === "Blaze" || g.n === "Permafrost")) ttl += 2; if (g && g.n === "Starfall") ttl *= 2;
+    B.tiles.push({x:f.x, y:f.y, k:TILE[el], ttl, by:u.hid}); fx(f.x, f.y, TILEINFO[TILE[el]][0], TILE[el]); return " " + TILEINFO[TILE[el]][0] + " tile left behind" + (g && ["Blaze", "Permafrost", "Starfall"].includes(g.n) ? " (" + g.n + ": lasts " + ttl + " turns)." : "."); }
   if (el === "Storm") { const o = liveFoes().filter(x => x !== f && !x.stun).sort((a, b) => md(a, f) - md(b, f))[0]; if (!o) return ""; o.stun = (B.phase === "enemy" ? 2 : 1) + (big ? 1 : 0); fx(f.x, f.y, "", "shock"); fx(o.x, o.y, "SHOCK", "shock"); return " Shock: a nearby foe is stunned."; }
-  if (el === "Water") { fx(f.x, f.y, "", "tide"); const n = tide(f, big ? 3 : 2); return n ? " Tide: " + n + (n === 1 ? " foe is" : " foes are") + " pushed back." : ""; }
-  if (el === "Sand") { B.extra = big ? 25 : 15; fx(u.x, u.y, "HOURGLASS +" + B.extra + " s", "sand"); return " Hourglass: the next question, whoever takes it, gets " + B.extra + " extra seconds."; }
-  if (el === "Steam") { if (B.mode === "skirmish" && S.skw[B.c.id]) return ""; if (Math.random() < (big ? 0.4 : 0.25)) { S.orbs++; B.drops++; fx(u.x, u.y, "+1 ORB", "steam"); return " Salvage: " + nm(u.hid) + " finds an orb."; } return ""; }
+  if (el === "Water") { fx(f.x, f.y, "", "tide"); const n = tide(f, (big ? 3 : 2) + (sigIs(u, "Riptide") ? 1 : sigIs(u, "Undertow") ? 2 : 0)); return n ? " Tide: " + n + (n === 1 ? " foe is" : " foes are") + " pushed back." : ""; }
+  if (el === "Sand") { B.extra = (big ? 25 : 15) + (sigIs(u, "Mirage") ? 10 : 0); fx(u.x, u.y, "HOURGLASS +" + B.extra + " s", "sand"); return " Hourglass: the next question, whoever takes it, gets " + B.extra + " extra seconds."; }
+  if (el === "Steam") { if (B.mode === "skirmish" && S.skw[B.c.id]) return ""; if (Math.random() < (big ? 0.4 : 0.25)) { const k = sigIs(u, "Boiler") ? 2 : 1; S.orbs += k; B.drops += k; fx(u.x, u.y, "+" + k + " ORB", "steam"); return " Salvage: " + nm(u.hid) + " finds " + (k === 2 ? "two orbs (Boiler)." : "an orb."); } return ""; }
   if (enemy || B.phase !== "player") return "";
   if (el === "Shadow") { if (u.over) return ""; u.again = true; if (liveFoes().length) B.pend = {type:"swap", u}; fx(u.x, u.y, "SHADOWSTEP", "shadow"); return " Shadowstep: " + nm(u.hid) + " may swap places with a foe and attack again."; }
   if (el === "Earth") { if (!B.tiles.length) return ""; B.pend = {type:"tile", u, t:null}; fx(u.x, u.y, "EARTHSHAPER", "earth"); return " Earthshaper: " + nm(u.hid) + " may move one tile."; }
@@ -454,7 +514,7 @@ function startSkirmish(chId){
 function liveFoes(){ return B.foes.filter(f => f.on); }
 function alive(){ return B.units.filter(u => !u.out); }
 function tileAt(x, y){ return B.tiles.find(t => t.x === x && t.y === y); }
-function occupied(x, y, me){ return B.units.some(u => !u.out && u !== me && u.x === x && u.y === y) || B.foes.some(f => f.on && f !== me && f.x === x && f.y === y); }
+function occupied(x, y, me){ return (B.esc && !B.esc.done && !B.esc.dead && me !== B.esc && B.esc.x === x && B.esc.y === y) || B.units.some(u => !u.out && u !== me && u.x === x && u.y === y) || B.foes.some(f => f.on && f !== me && f.x === x && f.y === y); }
 function inside(x, y){ return x >= 0 && y >= 0 && x < COLS && y < ROWS; }
 function spawnMore(){
   const r = rng(hash(B.c.id + ":" + B.turn + ":" + B.mode + ":" + S.sk + ":" + B.queue.length)); let n = 0;
@@ -491,7 +551,7 @@ function engage(f){
   setTimeout(() => { if (!B) return; B.busy = false; openQ(f, u, false, () => finishAct(u)); }, 270);
 }
 function finishAct(u){
-  if (u.again && !u.out) { u.again = false; u.over = true; u.moved = false; } else u.acted = true;
+  if (u.again && !u.out) { u.again = false; u.over = true; u.moved = false; if (sigIs(u, "Spore Burst") && u.hp < u.max) { u.hp = Math.min(u.max, u.hp + 1); fx(u.x, u.y, "SPORE BURST +♥0.5", "bloom"); } } else u.acted = true;
   B.sel = null; afterPlayerAction();
 }
 function useSkill(){
@@ -504,9 +564,13 @@ function useSkill(){
 function skillTarget(kind, o){
   const p = B.pend, u = p.u;
   if (p.sk.t !== kind) return;
-  if (u.role === "F") { if (o === u) return; const x = u.x, y = u.y; u.x = o.x; u.y = o.y; o.x = x; o.y = y; fx(u.x, u.y, "RESCUE", "skill"); fx(o.x, o.y, "", "skill"); }
-  else if (u.role === "H") { if (o.hp >= o.max) { B.el.info.textContent = nm(o.hid) + " is already at full hearts."; return; } o.hp = Math.min(o.max, o.hp + 2); fx(o.x, o.y, "MEND +♥1", "bloom"); }
-  else if (u.role === "R") { if (md(u, o) > 3) { B.el.info.textContent = "That foe is more than 3 tiles away."; return; } o.stun = Math.max(o.stun || 0, 1); fx(o.x, o.y, "PINNED", "shock"); }
+  const g = sigOf(u);
+  if (u.role === "F") { if (o === u) return; const x = u.x, y = u.y; u.x = o.x; u.y = o.y; o.x = x; o.y = y; fx(u.x, u.y, "RESCUE", "skill"); fx(o.x, o.y, "", "skill");
+    if (g && g.n === "Skyguard") { o.armor = true; fx(o.x, o.y, "ARMOR", "ward"); } if (g && g.n === "Thunderdive") stunNear(u, null, 1); }
+  else if (u.role === "H") { if (o.hp >= o.max && !(g && g.n !== "Overgrowth")) { B.el.info.textContent = nm(o.hid) + " is already at full hearts."; return; } o.hp = Math.min(o.max, o.hp + 2); fx(o.x, o.y, "MEND +♥1", "bloom");
+    if (g && g.n === "Overgrowth" && !tileAt(o.x, o.y)) { B.tiles.push({x:o.x, y:o.y, k:"bloom", ttl:3, by:u.hid}); fx(o.x, o.y, "HEAL", "bloom"); } if (g && g.n === "Radiance") { o.armor = true; fx(o.x, o.y, "ARMOR", "ward"); } if (g && g.n === "Sands of Time") { B.extra = Math.max(B.extra || 0, 15); fx(u.x, u.y, "HOURGLASS +15 s", "sand"); } }
+  else if (u.role === "R") { const rr = g && g.n === "Longshot" ? 4 : 3; if (md(u, o) > rr) { B.el.info.textContent = "That foe is more than " + rr + " tiles away."; return; } o.stun = Math.max(o.stun || 0, g && g.n === "Longshot" ? 2 : 1); fx(o.x, o.y, "PINNED", "shock");
+    if (g && g.n === "Fuse" && !tileAt(o.x, o.y)) { B.tiles.push({x:o.x, y:o.y, k:"burn", ttl:3, by:u.hid}); fx(o.x, o.y, "BURN", "burn"); } }
   u.cd = p.sk.cd; pendDone();
 }
 function autoEnd(){ if (B && !B.pend && !alive().some(u => !u.acted)) setTimeout(() => { if (B && B.phase === "player" && !Q && !B.pend) endPlayerPhase(); }, 350); }
@@ -515,7 +579,7 @@ function tileClick(x, y){
   const p = B.pend; if (!p || p.type !== "tile") return;
   if (!p.t) { const t = tileAt(x, y); if (t) { p.t = t; drawField(); } return; }
   const here = tileAt(x, y); if (here && here !== p.t) return;
-  fx(p.t.x, p.t.y, "", "earth"); p.t.x = x; p.t.y = y; p.t.ttl = Math.max(p.t.ttl, 2); fx(x, y, TILEINFO[p.t.k][0] + " MOVED", p.t.k); pendDone();
+  fx(p.t.x, p.t.y, "", "earth"); p.t.x = x; p.t.y = y; p.t.ttl = sigIs(p.u, "Bedrock") ? 5 : Math.max(p.t.ttl, 2); fx(x, y, TILEINFO[p.t.k][0] + " MOVED" + (sigIs(p.u, "Bedrock") ? " · BEDROCK" : ""), p.t.k); pendDone();
 }
 function afterPlayerAction(){
   if (!B) return; if (battleOver()) return;
@@ -536,11 +600,13 @@ function nextFoe(){ if (!B || B.phase !== "player" || B.pend) return; const us =
   let best = null; liveFoes().forEach(f => { us.forEach(u => { const d = md(u, f); if (!best || d < best.d) best = {f, d}; }); }); if (best) engage(best.f); }
 function endPlayerPhase(){
   if (!B || B.phase !== "player" || Q || B.busy) return;
-  B.pend = null; B.phase = "enemy"; B.sel = null; drawField(); banner("Enemy Phase");
+  if (B.goal && !B.goal.done && !B.goal.failed && alive().some(u => u.x === B.goal.x && u.y === B.goal.y)) { B.goal.done = B.turn; fx(B.goal.x, B.goal.y, "BANNER TAKEN", "bloom"); }
+  B.pend = null; B.phase = "enemy"; B.sel = null; drawField(); banner(B.goal && B.goal.done === B.turn ? "Banner taken" : "Enemy Phase");
   setTimeout(() => { if (!B) return; moveFoes(); if (breach()) return; drawField();
     setTimeout(() => { if (!B) return;
       const us = alive(), inr = f => us.filter(u => md(u, f) <= f.rng), low = f => Math.min(...inr(f).map(u => u.taunt ? -1 : u.hp)), near = f => Math.min(...us.map(u => md(u, f)));
-      const list = liveFoes().filter(f => !f.stag && !f.stun && inr(f).length).sort((a, b) => low(a) - low(b) || near(a) - near(b) || a.i - b.i).slice(0, ENEMY_ATTACKS);
+      const esc = B.esc && !B.esc.done && !B.esc.dead ? B.esc : null, raid = f => esc && md(f, esc) <= f.rng;
+      const list = liveFoes().filter(f => !f.stag && !f.stun && (inr(f).length || raid(f))).sort((a, b) => (inr(a).length ? low(a) : 0) - (inr(b).length ? low(b) : 0) || near(a) - near(b) || a.i - b.i).slice(0, ENEMY_ATTACKS);
       enemyAttacks(list, 0); }, 450); }, 800);
 }
 function breach(){
@@ -551,12 +617,12 @@ function breach(){
   return false;
 }
 function moveFoes(){
-  const us = alive(), vil = B.vil; if (!us.length && !vil) return;
+  const us = alive(), vil = B.vil || (B.esc && !B.esc.done && !B.esc.dead ? B.esc : null); if (!us.length && !vil) return;
   const weakFor = f => us.slice().sort((a, b) => (b.taunt ? 1 : 0) - (a.taunt ? 1 : 0) || a.hp - b.hp || md(a, f) - md(b, f))[0];
   const goal = f => vil ? md(f, vil) : md(f, weakFor(f));
   liveFoes().filter(f => !f.stun).sort((a, b) => goal(a) - goal(b)).forEach(f => { const t0 = tileAt(f.x, f.y); f.stag = !!(t0 && t0.k === "burn");
     const weak = us.length ? weakFor(f) : null, hits = (p, u) => md(u, p) <= f.rng;
-    if (!vil && hits(f, weak)) return;
+    if (!B.vil && weak && hits(f, weak)) return;
     const m = new Map([[f.x + "," + f.y, 0]]), q = [[f.x, f.y]];
     while (q.length) { const [x, y] = q.shift(), d = m.get(x + "," + y); if (d >= f.mv) continue; const here = tileAt(x, y); if (here && here.k === "burn" && d > 0) continue;
       for (const [dx, dy] of DIRS) { const nx = x + dx, ny = y + dy, k = nx + "," + ny; if (!inside(nx, ny) || m.has(k) || occupied(nx, ny, f)) continue; const t = tileAt(nx, ny); if (t && t.k === "frost") continue; m.set(k, d + 1); q.push([nx, ny]); } }
@@ -571,7 +637,11 @@ function enemyAttacks(list, k){
   if (!B) return; if (battleOver()) return;
   if (k >= list.length || !alive().length) return playerPhaseStart();
   const f = list[k]; if (!f.on || f.stun) return enemyAttacks(list, k + 1);
-  const targets = alive().filter(u => md(u, f) <= f.rng).sort((a, b) => (b.taunt ? 1 : 0) - (a.taunt ? 1 : 0) || a.hp - b.hp || md(a, f) - md(b, f)); if (!targets.length) return enemyAttacks(list, k + 1);
+  const targets = alive().filter(u => md(u, f) <= f.rng).sort((a, b) => (b.taunt ? 1 : 0) - (a.taunt ? 1 : 0) || a.hp - b.hp || md(a, f) - md(b, f));
+  const esc = B.esc && !B.esc.done && !B.esc.dead ? B.esc : null;
+  if (!targets.length && esc && md(f, esc) <= f.rng) { const u = alive().sort((a, b) => md(a, esc) - md(b, esc))[0]; if (!u) return enemyAttacks(list, k + 1);
+    banner(HERO[f.hero].c + " raids the courier"); setTimeout(() => { if (!B) return; openQ(f, u, true, () => enemyAttacks(list, k + 1)); Q.raid = true; drawQ(); }, 700); return; }
+  if (!targets.length) return enemyAttacks(list, k + 1);
   const u = targets[0]; banner(HERO[f.hero].c + " attacks " + nm(u.hid));
   setTimeout(() => { if (!B) return; openQ(f, u, true, () => enemyAttacks(list, k + 1)); }, 700);
 }
@@ -580,12 +650,14 @@ function playerPhaseStart(){
   B.phase = "player"; B.turn++;
   if (B.mode === "village" && B.turn > VIL.rounds) return finishVillage(true);
   B.tiles.forEach(t => t.ttl--); B.tiles = B.tiles.filter(t => t.ttl > 0);
-  alive().forEach(u => { const t = tileAt(u.x, u.y); if (t && t.k === "bloom" && u.hp < u.max) { u.hp = Math.min(u.max, u.hp + 2); B.tiles = B.tiles.filter(x => x !== t); fx(u.x, u.y, "+♥1", "bloom"); } });
+  alive().forEach(u => { const t = tileAt(u.x, u.y); if (t && t.k === "bloom" && u.hp < u.max) { u.hp = Math.min(u.max, u.hp + 2); B.tiles = B.tiles.filter(x => x !== t); fx(u.x, u.y, "+♥1", "bloom"); if (t.by && sigIs({hid:t.by}, "Verdance")) { u.armor = true; fx(u.x, u.y, "ARMOR", "ward"); } } });
   let msg = B.mode === "village" ? "Round " + B.turn + " of " + VIL.rounds : "Turn " + B.turn;
+  if (B.esc && !B.esc.done && !B.esc.dead) { const e = B.esc; for (let k = 0; k < MISSION.escort.speed && e.x < COLS - 1 && !occupied(e.x + 1, e.y, e); k++) e.x++; fx(e.x, e.y, "", "skill"); if (e.x >= COLS - 1) { e.done = true; fx(e.x, e.y, "DELIVERED", "bloom"); msg = "The courier is delivered"; } }
+  if (B.goal && !B.goal.done && B.turn > B.goal.limit && !B.goal.failed) { B.goal.failed = true; msg = "The banner is lost"; fx(B.goal.x, B.goal.y, "TOO LATE", "dmg"); }
   if (deploy()) msg = "Reserves arrive";
   if (B.mode === "village") spawnWave(VIL.wave);
   else if (liveFoes().length <= 6 && B.queue.length && spawnMore()) msg = "Reinforcements";
-  B.units.forEach(u => { u.acted = false; u.moved = false; u.over = false; u.again = false; u.taunt = false; if (u.cd) u.cd--; }); B.sel = null;
+  B.units.forEach(u => { u.acted = false; u.moved = false; u.over = false; u.again = false; u.taunt = false; if (u.cd) u.cd--; if (!u.out && sigIs(u, "Bulwark") && !u.armor) { u.armor = true; } }); B.sel = null;
   B.foes.forEach(f => { if (f.stun) f.stun--; });
   drawField(); banner(msg);
 }
@@ -607,7 +679,16 @@ function battleOver(){
 function hurt(u, halves){
   const t = tileAt(u.x, u.y);
   if (t && t.k === "ward") { B.tiles = B.tiles.filter(x => x !== t); fx(u.x, u.y, "WARD BLOCKS", "ward"); return "The ward tile blocked the hit."; }
-  if (u.armor) { u.armor = false; fx(u.x, u.y, "ARMOR BLOCKS", "ward"); return nm(u.hid) + "'s armor blocked the hit."; }
+  if (u.armor) { u.armor = false; fx(u.x, u.y, "ARMOR BLOCKS", "ward"); let m = nm(u.hid) + "'s armor blocked the hit."; const f = Q && Q.f, g = sigOf(u);
+    if (g && u.role === "V") {
+      if (g.n === "Molten Plate" && f && !tileAt(f.x, f.y)) { B.tiles.push({x:f.x, y:f.y, k:"burn", ttl:3, by:u.hid}); fx(f.x, f.y, "BURN", "burn"); m += " Molten Plate: a burn tile scorches the attacker."; }
+      else if (g.n === "Rime" && f) { f.stun = Math.max(f.stun || 0, 1); fx(f.x, f.y, "STUN", "shock"); m += " Rime: the attacker is frozen in place."; }
+      else if (g.n === "Thick Hide") { u.hp = Math.min(u.max, u.hp + 1); fx(u.x, u.y, "+♥0.5", "bloom"); m += " Thick Hide heals half a heart."; }
+      else if (g.n === "Hourglass Guard") { B.extra = Math.max(B.extra || 0, 15); fx(u.x, u.y, "HOURGLASS +15 s", "sand"); m += " Hourglass Guard: the next question gets 15 extra seconds."; }
+      else if (g.n === "Vengeance" && u.cd) { u.cd--; m += " Vengeance: Taunt recharges."; }
+      else if (g.n === "Static Shell" && f) { if (stunNear(u, f, 1)) m += " Static Shell stuns the nearest other foe."; }
+      else if (g.n === "Overclock") { S.orbs++; B.drops++; fx(u.x, u.y, "+1 ORB", "steam"); m += " Overclock salvages an orb."; } }
+    return m; }
   u.hp -= halves; fx(u.x, u.y, u.hp > 0 ? "-" + hearts(halves) : "FALLEN", "dmg");
   if (u.hp > 0) return nm(u.hid) + " loses " + hearts(halves).slice(1) + (halves === 2 ? " heart." : " hearts.");
   u.out = true; u.hp = 0;
@@ -626,6 +707,8 @@ function battle(){
   el.tl = h("div"); el.field.appendChild(el.tl);
   el.hl = h("div"); el.field.appendChild(el.hl);
   if (B.vil) { el.vt = h("div", {class:"vtile", title:"The village. A foe that walks in costs it a heart."}, [h("img", {src:"u/village.png", alt:"Village"}), h("span")]); el.field.appendChild(el.vt); }
+  if (B.esc) { el.et = h("div", {class:"vtile esc", title:"The courier. She walks two tiles east each turn; foes beside her raid."}, [h("img", {src:"u/courier.png", alt:"Courier"}), h("span")]); el.field.appendChild(el.et); }
+  if (B.goal) { el.gt = h("div", {class:"vtile goal", title:"The banner. End a turn with a hero here."}, [h("img", {src:"u/banner.png", alt:"Banner"}), h("span")]); el.field.appendChild(el.gt); }
   el.phase = h("div", {class:"phase"}); el.field.appendChild(el.phase);
   el.bar = h("div", {class:"row"}); el.msg = h("div", {class:"muted"}); el.info = h("div", {class:"pixs"}); el.modal = h("div");
   B.el = el;
@@ -633,21 +716,21 @@ function battle(){
     h("div", {class:"hud"}, [
       h("span", {}, [h("b", {text:(B.rematch ? "Rematch: " : B.mode === "exam" ? "Battle: " : B.mode === "village" ? "" : "Skirmish: ") + c.name})]),
       h("span", {}, [el.ph]), h("span", {}, [B.vil ? "Round " : "Turn ", el.turn]), h("span", {}, [B.vil ? "Foes on field " : "Foes left ", el.left]),
-      B.vil ? h("span", {}, ["Village ", el.vh]) : null, el.buff,
+      B.vil ? h("span", {}, ["Village ", el.vh]) : null, B.esc || B.goal ? h("span", {}, [MISSION[B.mission].n + " ", el.vh]) : null, el.buff,
       ex ? h("span", {}, ["Time ", el.timer]) : null]),
     el.field, el.bar, el.info, el.msg, el.modal]);
 }
 function drawField(){
-  if (!B || !B.el) return; const el = B.el, F = el.field, seen = new Set(), pend = B.phase === "player" ? B.pend : null;
+  if (!B || !B.el || !B.el.field) return; const el = B.el, F = el.field, seen = new Set(), pend = B.phase === "player" ? B.pend : null;
   F.classList.toggle("paused", !!B.paused);
   const pos = (e, x, y) => { e.style.left = (x * 100 / COLS) + "%"; e.style.top = (y * 100 / ROWS) + "%"; };
   const place = (key, x, y, img) => { let e = el.pcs[key]; if (!e) { e = h("button", {class:"pc"}, [h("img", {src:img, alt:""}), h("span", {class:"tagn"}), h("span", {class:"tagr"}), h("span", {class:"tags"})]); F.appendChild(e); el.pcs[key] = e; } seen.add(key); pos(e, x, y); return e; };
   B.units.forEach((u, ix) => { if (u.out) return; const hr = HERO[u.hid], e = place("u" + ix, u.x, u.y, hr.img);
     e.className = "pc unit" + (u.acted ? " acted" : "") + (B.sel === ix ? " sel" : "") + (u.hid === "militia" ? " mil" : "") + (u.taunt ? " taunt" : "") + (pend && pend.type === "skill" && pend.sk.t === "ally" ? " pickme" : ""); e.onclick = () => clickUnit(ix);
-    const info = nm(u.hid) + " · " + ROLE[u.role].n + (u.el ? " · " + u.el : "") + " · " + hearts(u.hp) + "/" + hearts(u.max).slice(1) + " · range " + u.rng + " · move " + u.mv + (u.armor ? " · armor up" : "") + (u.insight ? " · Insight ready" : "") + (u.el ? " · " + elName(u.el) + ": " + elDesc(u.el) : "") + (SKILL[u.role] ? " · skill " + SKILL[u.role].n + (u.cd ? " in " + u.cd + (u.cd === 1 ? " turn" : " turns") : " ready") : "") + (u.taunt ? " · taunting" : "") + (u.focus ? " · focused" : "");
+    const info = nm(u.hid) + " · " + ROLE[u.role].n + (u.el ? " · " + u.el + (atHome(u) ? " (home ground: +50% exp, skills recharge faster)" : "") : "") + " · " + hearts(u.hp) + "/" + hearts(u.max).slice(1) + " · range " + u.rng + " · move " + u.mv + (u.armor ? " · armor up" : "") + (u.insight ? " · Insight ready" : "") + (u.el ? " · " + elName(u.el) + ": " + elDesc(u.el) : "") + (SKILL[u.role] ? " · skill " + SKILL[u.role].n + (u.cd ? " in " + u.cd + (u.cd === 1 ? " turn" : " turns") : " ready") : "") + (sigOf(u) ? " · " + sigOf(u).n + ": " + sigOf(u).d : "") + (u.taunt ? " · taunting" : "") + (u.focus ? " · focused" : "");
     e.setAttribute("aria-label", info); e.title = info; e.onmouseenter = () => { el.info.textContent = info; };
     e.querySelector(".tagn").textContent = hearts(u.hp) + (u.armor ? "◆" : ""); e.querySelector(".tagr").textContent = u.rng > 1 ? "R" + u.rng : "";
-    e.querySelector(".tags").textContent = [u.taunt ? "TAUNT" : "", u.focus ? "FOCUS" : "", u.again && !u.acted ? "x2" : ""].filter(Boolean).join(" "); });
+    e.querySelector(".tags").textContent = [u.taunt ? "TAUNT" : "", u.focus ? "FOCUS" : "", u.again && !u.acted ? "x2" : "", atHome(u) ? "HOME" : ""].filter(Boolean).join(" "); });
   B.foes.forEach(f => { if (!f.on) return; const hr = HERO[f.hero], e = place(f.key, f.x, f.y, hr.img);
     e.className = "pc foe" + (f.boss ? " boss" : "") + (f.elite && !f.boss ? " elite" : "") + (f.stun ? " stun" : f.stag ? " stag" : "") + (pend && (pend.type === "swap" || (pend.type === "skill" && pend.sk.t === "foe")) ? " pickme" : ""); e.onclick = () => clickFoe(f);
     const info = (B.vil ? "Foe" : "Question " + (f.i + 1)) + " · foe range " + f.rng + " · move " + f.mv + (f.elite || f.boss ? " · " + (f.boss ? "boss" : "elite") + ": a miss costs 2 hearts" : "") + (f.stag ? " · burning, cannot attack" : "") + (f.stun ? " · stunned" : "");
@@ -664,6 +747,8 @@ function drawField(){
   else if (!pend && B.phase === "player" && B.sel != null && !B.units[B.sel].acted && !B.units[B.sel].out) { const u = B.units[B.sel];
     for (const k of reach(u).keys()) { const [x, y] = k.split(",").map(Number); if (x === u.x && y === u.y) continue; const t = h("button", {class:"hl", "aria-label":"Move to column " + (x + 1) + ", row " + (y + 1)}); pos(t, x, y); t.onclick = () => moveTo(u, x, y); el.hl.appendChild(t); } }
   if (B.vil) { pos(el.vt, B.vil.x, B.vil.y); el.vt.querySelector("span").textContent = "♥" + B.vhp; el.vh.textContent = "♥ " + B.vhp + "/" + VIL.hearts; }
+  if (B.esc) { const e = B.esc; pos(el.et, e.x, e.y); el.et.classList.toggle("off", e.dead || e.done); el.et.querySelector("span").textContent = e.dead ? "" : "♥" + e.hp; el.vh.textContent = e.done ? "delivered ♥" + e.hp : e.dead ? "failed" : "courier ♥" + e.hp + " · " + (COLS - 1 - e.x) + " tiles to go"; }
+  if (B.goal) { const g = B.goal; pos(el.gt, g.x, g.y); el.gt.classList.toggle("off", !!g.done || !!g.failed); el.vh.textContent = g.done ? "banner taken, turn " + g.done : g.failed ? "too late" : (g.limit - B.turn + 1) + (g.limit - B.turn + 1 === 1 ? " turn left" : " turns left"); }
   el.turn.textContent = B.vil ? Math.min(B.turn, VIL.rounds) + " of " + VIL.rounds : B.turn; el.ph.textContent = B.phase === "player" ? "Player phase" : "Enemy phase";
   el.left.textContent = B.mode === "exam" ? (B.ids.length - answered(B.ex, B.ids.length)) : B.vil ? liveFoes().length : (liveFoes().length + B.queue.length);
   el.buff.textContent = B.extra ? "Hourglass: next question +" + B.extra + " s" : "";
@@ -675,11 +760,11 @@ function drawField(){
   el.bar.appendChild(h("button", {text:"End turn (T)", disabled:!pl, on:{click:endPlayerPhase}}));
   if (B.mode === "exam") el.bar.appendChild(h("button", {text:B.paused ? "Resume" : "Pause", disabled:!pl, on:{click:() => { B.paused = !B.paused; save(); drawField(); }}}));
   else el.bar.appendChild(h("button", {text: armed === "retreat" ? "Click again to retreat" : "Retreat", disabled:!pl, on:{click:() => { if (armed === "retreat") { if (B.vil) finishVillage(false); else finishSkirmish(false); } else { armed = "retreat"; drawField(); } }}}));
-  el.msg.textContent = pend && pend.type === "skill" ? pend.sk.n + ": " + pend.sk.d + ". " + (pend.sk.t === "foe" ? "Click a foe within 3 tiles of " + nm(pend.u.hid) + "." : "Click the hero.")
+  el.msg.textContent = pend && pend.type === "skill" ? pend.sk.n + ": " + pend.sk.d + ". " + (pend.sk.t === "foe" ? "Click a foe within " + (sigIs(pend.u, "Longshot") ? 4 : 3) + " tiles of " + nm(pend.u.hid) + "." : "Click the hero.")
     : pend ? (pend.type === "swap" ? "Shadowstep: click any foe to swap places with " + nm(pend.u.hid) + ". After the swap it attacks from where it lands. Skip keeps the second attack without swapping."
       : !pend.t ? "Earthshaper: click a tile to pick it up." : "Now click any square, hero or foe to put the " + TILEINFO[pend.t.k][0] + " tile there.")
     : B.mode === "exam"
-    ? (B.rematch ? "Rematch: leaving before the last question discards it. " : "") + "Click a foe to attack with the best-placed hero, or pick a hero and a tile first. A selected hero can also use its skill. When your heroes have acted, foes move toward your weakest hero and up to " + ENEMY_ATTACKS + " attack with a " + ENEMY_SECS + "-second question; your own attacks get " + PLAYER_SECS + " seconds. A wrong answer or timeout costs the fighting hero 1 heart, or 2 against a starred elite."
+    ? (B.rematch ? "Rematch: leaving before the last question discards it. " : B.mission !== "hunt" ? MISSION[B.mission].n + ": " + MISSION[B.mission].d + " " : "") + "Click a foe to attack with the best-placed hero, or pick a hero and a tile first. A selected hero can also use its skill. When your heroes have acted, foes move toward your weakest hero and up to " + ENEMY_ATTACKS + " attack with a " + ENEMY_SECS + "-second question; your own attacks get " + PLAYER_SECS + " seconds. A wrong answer or timeout costs the fighting hero 1 heart, or 2 against a starred elite."
     : B.vil ? "Hold the village for " + VIL.rounds + " rounds. " + VIL.wave + " foes arrive each round and march on the village; one that walks in costs it a heart. A wrong answer costs your hero 1 heart and the foe stays with a new question. Heroes cannot stand on the village."
     : "Wrong answers cost 1.5 hearts here and the foe comes back. Answer every foe correctly once to win the emblem hero.";
 }
@@ -687,8 +772,9 @@ function drawField(){
 function openQ(f, u, enemy, cb){
   const ex = B.ex;
   Q = {f, u, enemy, cb, cid:f.cid, i:f.i, pick:null, flag:"", done:false, cut:[], ins:false, msg:"", total:0, left:0, timer:null};
-  Q.bonus = [B.extra ? "Hourglass +" + B.extra : "", u.focus ? "Focus +30" : ""].filter(Boolean).join(", ");
-  Q.total = Q.left = (enemy ? ENEMY_SECS : PLAYER_SECS) + (B.extra || 0) + (u.focus ? 30 : 0); B.extra = 0;
+  const amb = !enemy && u.over && sigIs(u, "Ambush") ? 15 : 0;
+  Q.bonus = [B.extra ? "Hourglass +" + B.extra : "", u.focus ? "Focus +30" : "", amb ? "Ambush +15" : ""].filter(Boolean).join(", ");
+  Q.total = Q.left = (enemy ? ENEMY_SECS : PLAYER_SECS) + (B.extra || 0) + (u.focus ? 30 : 0) + amb; B.extra = 0;
   if (ex && !ex.started) ex.started = true;
   Q.timer = setInterval(() => { if (!Q || Q.done) return; const off = navigator.onLine === false; if (!off) Q.left--; const t = B.el.modal.querySelector(".clock"); if (t) { t.querySelector("i").style.width = (100 * Q.left / Q.total) + "%"; t.querySelector("b").textContent = off ? "Offline · clock paused" : Q.left + " s" + (Q.bonus ? " · " + Q.bonus : ""); t.classList.toggle("low", Q.left <= 10); } if (Q.left <= 0) resolve(null); }, 1000);
   drawQ();
@@ -700,8 +786,8 @@ function drawQ(){
     return h("button", {class:cls, disabled:Q.done || Q.cut.includes(k), on:{click:() => choose(k)}}, [h("b", {text:L[k]}), h("span", {text:t})]); }));
   const kids = [
     h("div", {class:"qhead"}, [
-      h("div", {class:"qfoe"}, [h("img", {src:hr.img, alt:""}), h("span", {text:(B.vil ? "Round " + Math.min(B.turn, VIL.rounds) + " of " + VIL.rounds : "Question " + (Q.i + 1) + " of " + B.ids.length) + (Q.f.boss ? " · Boss: a miss costs 2 hearts" : Q.f.elite ? " · Elite: a miss costs 2 hearts" : "")})]),
-      h("div", {class:"qfoe"}, [h("span", {text: Q.enemy ? "attacks " + nm(Q.u.hid) + " (" + hearts(Q.u.hp) + ")" : nm(Q.u.hid) + " attacks (" + hearts(Q.u.hp) + ")"}), h("img", {src:HERO[Q.u.hid].img, alt:""})])]),
+      h("div", {class:"qfoe"}, [h("img", {src:hr.img, alt:""}), h("span", {text: B.mode === "boss" ? B.boss.name + (Q.parry ? " strikes: answer to parry" : " · Round " + B.turn) : (B.vil ? "Round " + Math.min(B.turn, VIL.rounds) + " of " + VIL.rounds : "Question " + (Q.i + 1) + " of " + B.ids.length) + (Q.f.boss ? " · Boss: a miss costs 2 hearts" : Q.f.elite ? " · Elite: a miss costs 2 hearts" : "")})]),
+      h("div", {class:"qfoe"}, [h("span", {text: Q.parry ? nm(Q.u.hid) + " parries (" + hearts(Q.u.hp) + ")" : Q.raid ? "raids the courier (♥" + (B.esc ? B.esc.hp : 0) + "); " + nm(Q.u.hid) + " defends" : Q.enemy ? "attacks " + nm(Q.u.hid) + " (" + hearts(Q.u.hp) + ")" : nm(Q.u.hid) + " attacks (" + hearts(Q.u.hp) + ")"}), h("img", {src:HERO[Q.u.hid].img, alt:""})])]),
     !Q.done ? h("div", {class:"clock" + (Q.left <= 10 ? " low" : "") + (Q.bonus ? " bonus" : "")}, [(() => { const i = h("i"); i.style.width = (100 * Q.left / Q.total) + "%"; return i; })(), h("b", {text:Q.left + " s" + (Q.bonus ? " · " + Q.bonus : "")})]) : null,
     h("p", {class:"stem", text:card.q}),
     imgSrc(card) ? h("img", {class:"fig", src:imgSrc(card), alt:card.alt || "Question image"}) : null,
@@ -726,6 +812,7 @@ function setFlag(f){ if (!Q || Q.done || B.mode !== "exam") return; Q.flag = Q.f
 function insight(){ if (!Q || Q.done || !Q.u.insight) return; const card = CARDS[Q.cid], wrong = card.o.map((_, k) => k).filter(k => k !== card.a && !Q.cut.includes(k)); if (wrong.length < 2) return; Q.cut.push(wrong[Math.floor(Math.random() * wrong.length)]); Q.u.insight = false; Q.ins = true; drawQ(); }
 function resolve(pick){
   if (!Q || Q.done) return; if (Q.timer) { clearInterval(Q.timer); Q.timer = null; }
+  if (B.mode === "boss") return resolveBoss(pick);
   const f = Q.f, u = Q.u, cid = Q.cid, card = CARDS[cid], ok = pick === card.a, timeout = pick == null;
   Q.done = true; Q.pick = pick; S.stats.ans++; if (ok) S.stats.ok++;
   if (B.mode === "exam") { const ex = B.ex; ex.a[f.i] = timeout ? -1 : pick; ex.f[f.i] = Q.flag; ex.x[f.i] = (Q.enemy ? "e" : "") + (timeout ? "t" : "") + (Q.ins ? "i" : ""); }
@@ -733,13 +820,17 @@ function resolve(pick){
   B.log.push({cid, ok, pick});
   f.on = false; let msg; const foc = u.focus; u.focus = false;
   if (ok) {
-    msg = "Hit. " + nm(u.hid) + " defeats the foe.";
+    msg = "Hit. " + nm(u.hid) + (Q.raid ? " drives off the raider." : " defeats the foe.");
     if (u.el) msg += applyEl(u, f, Q.enemy);
-    if (u.hid !== "militia") addExp(u.hid, 20);
+    if (foc && sigIs(u, "Dread") && stunNear(f, f, 1)) msg += " Dread: the nearest foe is stunned.";
+    if (u.hid !== "militia") addExp(u.hid, atHome(u) ? 30 : 20);
+    if (atHome(u) && u.cd > 0) { u.cd--; msg += " Home ground: " + nm(u.hid) + "'s skill recharges faster."; }
     if (u.role === "H") { const w = alive().filter(x => x !== u && x.hp < x.max).sort((a, b) => (a.hp / a.max) - (b.hp / b.max))[0]; if (w) { w.hp = Math.min(w.max, w.hp + 1); fx(w.x, w.y, "+♥0.5", "bloom"); msg += " " + nm(w.hid) + " is healed half a heart."; } }
     if (B.mode === "skirmish") B.cleared[f.i] = true;
   } else {
-    msg = (timeout ? "Time ran out. " : "Miss. ") + (foc ? (fx(u.x, u.y, "FOCUS ABSORBS", "skill"), "Focus absorbs the blow.") : (Q.enemy ? "" : "The foe strikes back. ") + hurt(u, (B.mode === "skirmish" ? 3 : 2) + (f.elite || f.boss ? 2 : 0)));
+    if (Q.raid && B.esc) { B.esc.hp--; fx(B.esc.x, B.esc.y, B.esc.hp > 0 ? "COURIER -♥1" : "COURIER FALLS", "dmg"); if (B.esc.hp <= 0) B.esc.dead = true;
+      msg = (timeout ? "Time ran out. " : "Miss. ") + (B.esc.dead ? "The courier falls. The escort has failed, but the battle goes on." : "The raid lands: the courier loses a heart (" + B.esc.hp + " left)."); }
+    else msg = (timeout ? "Time ran out. " : "Miss. ") + (foc ? (fx(u.x, u.y, "FOCUS ABSORBS", "skill"), "Focus absorbs the blow.") : (Q.enemy ? "" : "The foe strikes back. ") + hurt(u, (B.mode === "skirmish" ? 3 : 2) + (f.elite || f.boss ? 2 : 0)));
     if (B.mode === "skirmish") { B.queue.push(f.i); msg += " This foe will return."; }
     else if (B.vil) { if (B.queue.length) { const ni = B.queue.shift(); f.i = ni; f.cid = B.ids[ni]; f.on = true; msg += " The foe holds its ground with a new question."; } else msg += " The foe falls back."; }
     else msg += " The foe escapes to the skirmish.";
@@ -747,8 +838,120 @@ function resolve(pick){
   Q.msg = msg; save(); drawField(); drawQ();
 }
 function hr(u){ return HERO[u.hid]; }
-function contQ(){ if (!Q || !Q.done) return; const cb = Q.cb; Q = null; B.el.modal.textContent = ""; flushFx(); cb(); }
+function contQ(){ if (!Q || !Q.done) return; const cb = Q.cb, counter = Q.counter, u = Q.u; Q = null; B.el.modal.textContent = ""; flushFx(); if (counter && B && B.mode === "boss" && !u.out) { setTimeout(() => { if (B) bossParry(u, cb); }, 300); return; } cb(); }
 
+/* ---------- boss battle (one per world) ---------- */
+const BOSS_WEAK = {Shadow:["Light"], Fire:["Water","Ice"], Ice:["Fire"], Nature:["Fire"], Water:["Storm"], Storm:["Earth"], Earth:["Nature"], Light:["Shadow"], Steam:["Water"], Sand:["Water"]};
+const BOSS_DMG = {S:3, C:3, R:2, F:2, V:2, H:1, M:1}, BOSS_WEEK = 7 * 86400000;
+function bossOf(w){ const b = w && w.boss; if (!b || !HERO[b.hero]) return null; return Object.assign({name:HERO[b.hero].n, hp:24, el:HERO[b.hero].el}, b); }
+function bossUnlocked(w){ const st = worldState(w); return st.of > 0 && st.n >= Math.ceil(st.of / 2); }
+function bossRec(w){ return S.boss[w.id] || (S.boss[w.id] = {n:0, wins:0, last:0}); }
+function bossPool(w){ return shuffle([].concat(...worldChapters(w).filter(c => c.exam && LOADED[c.id]).map(bankOf))); }
+function startBoss(w){
+  const bz = bossOf(w); if (!bz || !bossUnlocked(w)) return;
+  const ids = bossPool(w); if (ids.length < 10) return;
+  const t = team(); if (!t.length) return;
+  B = {mode:"boss", w, boss:{hero:bz.hero, name:bz.name, hp:bz.hp, max:bz.hp, el:bz.el, stag:false, rage:false}, c:{id:"boss:" + w.id, name:bz.name, realm:w.realms[0]}, ids, qi:0, log:[], turn:1, phase:"player", over:null, extra:0, el:null, fell:[], drops:0, t0:Date.now(), hits:0,
+    units:t.map(hid => Object.assign(mkUnit(hid, 0, 0), {acted:false}))};
+  go("boss");
+}
+function bossNextCard(){ if (B.qi >= B.ids.length) { B.ids = shuffle(B.ids); B.qi = 0; } return B.ids[B.qi++]; }
+function bossAct(ix){
+  if (!B || B.mode !== "boss" || Q || B.phase !== "player" || B.over) return; const u = B.units[ix]; if (!u || u.out || u.acted) return;
+  const cid = bossNextCard(); B.sel = ix;
+  openQ({cid, i:B.qi - 1, hero:B.boss.hero, boss:true, on:true}, u, false, () => { u.acted = true; B.sel = null; bossAfter(); });
+}
+function bossHurt(u, halves){
+  if (u.armor) { u.armor = false; return nm(u.hid) + "'s armor blocks the blow."; }
+  u.hp -= halves;
+  if (u.hp > 0) return nm(u.hid) + " loses " + hearts(halves).slice(1) + (halves === 2 ? " heart." : " hearts.");
+  u.out = true; u.hp = 0; if (u.hid === "militia") return "The militia recruit falls.";
+  const was = nm(u.hid), gone = S.heroes[u.hid] || {}; B.fell.push(was); delete S.heroes[u.hid]; S.team = (S.team || []).filter(x => x !== u.hid); S.fallen.push({id:u.hid, nm:was, t:Date.now(), ch:B.c.id, exp:gone.exp || 0, mg:gone.mg || 0});
+  return was + " has fallen and is lost.";
+}
+function resolveBoss(pick){
+  const u = Q.u, card = CARDS[Q.cid], ok = pick === card.a, timeout = pick == null, bz = B.boss;
+  Q.done = true; Q.pick = pick; S.stats.ans++; if (ok) S.stats.ok++;
+  const st = C(Q.cid); st.n++; if (ok) { st.s++; st.m = true; } else { st.s = 0; st.w++; }
+  B.log.push({cid:Q.cid, ok, pick}); let msg;
+  if (Q.parry) {
+    if (ok) { msg = "Parried! " + nm(u.hid) + " turns the blow aside."; if (u.hid !== "militia") addExp(u.hid, 10); }
+    else msg = (timeout ? "Time ran out. " : "Miss. ") + bossHurt(u, bz.rage ? 3 : 2);
+  } else if (ok) {
+    let dmg = BOSS_DMG[u.role] || 2, extra = "";
+    if (u.el && (BOSS_WEAK[bz.el] || []).includes(u.el)) { dmg++; extra += " " + u.el + " is strong against " + bz.el + ": +1."; }
+    if (u.role === "F" && bz.rage) { dmg++; extra += " Swoop on the enraged boss: +1."; }
+    if (u.role === "V") { u.armor = true; extra += " Armor raised."; }
+    if (u.role === "R") { bz.stag = true; extra += " The boss is staggered and skips its next attack."; }
+    if (u.role === "H") { const w = B.units.filter(x => !x.out && x !== u && x.hp < x.max).sort((a, b) => a.hp / a.max - b.hp / b.max)[0]; if (w) { w.hp = Math.min(w.max, w.hp + 2); extra += " " + nm(w.hid) + " is healed a heart."; } }
+    bz.hp = Math.max(0, bz.hp - dmg); B.hits++; if (u.hid !== "militia") addExp(u.hid, 25);
+    if (!bz.rage && bz.hp <= bz.max / 2 && bz.hp > 0) { bz.rage = true; extra += " " + bz.name + " is enraged: it now strikes twice a round and hits for 1.5 hearts."; }
+    msg = "Hit for " + dmg + "! " + nm(u.hid) + " strikes " + bz.name + " (" + bz.hp + "/" + bz.max + ")." + extra;
+    if (bz.hp <= 0) msg += " " + bz.name + " is defeated!";
+  } else {
+    msg = (timeout ? "Time ran out. " : "Miss. ") + bz.name + " counters " + nm(u.hid) + ".";
+    Q.counter = true;
+  }
+  Q.msg = msg; save(); drawQ(); drawBoss();
+}
+function bossAfter(){
+  if (!B || B.over) return; const bz = B.boss;
+  if (bz.hp <= 0) return finishBoss(true);
+  if (!B.units.some(u => !u.out)) return finishBoss(false);
+  // a missed attack is answered by an immediate counter: a parry question for the same hero
+  const last = B.log[B.log.length - 1], u = B.units[B.sel != null ? B.sel : -1];
+  drawBoss();
+  if (!B.units.some(u => !u.out && !u.acted)) setTimeout(() => { if (B && B.mode === "boss" && !Q && B.phase === "player") bossPhase(); }, 500);
+}
+function bossParry(u, cb){ const cid = bossNextCard(); openQ({cid, i:B.qi - 1, hero:B.boss.hero, boss:true, on:true}, u, true, cb); Q.parry = true; drawQ(); }
+function bossPhase(){
+  if (!B || B.over) return; const bz = B.boss; B.phase = "boss"; drawBoss();
+  const alive = () => B.units.filter(u => !u.out);
+  const attacks = bz.stag ? 0 : (bz.rage ? 2 : 1); bz.stag = false;
+  const step = k => { if (!B) return; if (bz.hp <= 0) return finishBoss(true); if (!alive().length) return finishBoss(false);
+    if (k >= attacks) { B.turn++; B.phase = "player"; B.units.forEach(u => { u.acted = false; }); drawBoss(); return; }
+    const targets = alive().sort((a, b) => a.hp - b.hp || Math.random() - 0.5), u = targets[k % targets.length];
+    B.msg = bz.name + " strikes at " + nm(u.hid) + "!"; drawBoss();
+    setTimeout(() => { if (!B) return; bossParry(u, () => step(k + 1)); }, 600); };
+  setTimeout(() => step(0), attacks ? 500 : 200);
+  if (!attacks) B.msg = bz.name + " is staggered and cannot attack this round.";
+}
+function finishBoss(win){
+  const w = B.w, bz = B.boss, r = bossRec(w); r.n++;
+  let orbs = 0, recruit = false, dup = false, weekly = false;
+  if (win) { r.wins++; if (r.wins === 1) { orbs = 30; dup = grant(bz.hero); recruit = !dup; } else if (Date.now() - (r.last || 0) >= BOSS_WEEK) { orbs = 10; weekly = true; } r.last = Date.now(); S.orbs += orbs; }
+  B.over = {win, orbs, recruit, dup, weekly, fell:B.fell.slice(), right:B.log.filter(x => x.ok).length, total:B.log.length, rounds:B.turn};
+  if (Q && Q.timer) clearInterval(Q.timer); Q = null; save(); drawBoss();
+}
+function bossView(){
+  const el = {}; el.modal = h("div"); el.box = h("div", {class:"bossbox"}); el.msg = h("div", {class:"muted"}); el.bar = h("div", {class:"row"}); el.info = h("div", {class:"pixs"}); B.el = el;
+  const wrap = h("div", {class:"panel"}, [el.box, el.bar, el.info, el.msg, el.modal]);
+  setTimeout(drawBoss, 0); return wrap;
+}
+function drawBoss(){
+  if (!B || B.mode !== "boss" || !B.el || !B.el.box) return; const el = B.el, bz = B.boss, box = el.box; box.textContent = "";
+  const pctHp = Math.round(100 * bz.hp / bz.max);
+  box.appendChild(h("div", {class:"hud"}, [h("span", {}, [h("b", {text:"Boss: " + bz.name})]), h("span", {}, ["Round ", h("b", {text:String(B.turn)})]), h("span", {}, [h("b", {text:B.phase === "player" ? "Your move" : bz.name + " attacks"})]), h("span", {}, [bz.el + " · weak to " + (BOSS_WEAK[bz.el] || []).join(", ")])]));
+  const bar = h("div", {class:"bosshp"}, [h("i"), h("b", {text:bz.hp + " / " + bz.max + (bz.rage ? " · ENRAGED" : "") + (bz.stag ? " · STAGGERED" : "")})]); bar.querySelector("i").style.width = pctHp + "%"; bar.classList.toggle("rage", bz.rage);
+  box.appendChild(h("div", {class:"bossfig" + (bz.rage ? " rage" : "")}, [h("img", {src:HERO[bz.hero].img, alt:bz.name}), bar]));
+  box.appendChild(h("div", {class:"bossteam"}, B.units.map((u, ix) => { const hr = HERO[u.hid], strong = u.el && (BOSS_WEAK[bz.el] || []).includes(u.el);
+    const card = h("button", {class:"hero r" + hr.r + (u.out ? " out" : "") + (u.acted ? " acted" : "") + (B.sel === ix ? " sel" : ""), disabled:u.out || u.acted || B.phase !== "player" || !!Q || !!B.over, on:{click:() => bossAct(ix)}}, [
+      h("img", {src:hr.img, alt:""}), h("span", {class:"hn", text:nm(u.hid)}), h("span", {class:"hc", text:ROLE[u.role].n + " · " + u.el + (strong ? " ★" : "")}),
+      h("span", {class:"hc", text: u.out ? "Fallen" : hearts(u.hp) + "/" + hearts(u.max).slice(1) + (u.armor ? " ◆" : "")}),
+      h("span", {class:"pixs", text: u.out ? "" : u.acted ? "Acted" : "Hit: " + ((BOSS_DMG[u.role] || 2) + (strong ? 1 : 0)) + (u.role === "R" ? " + stagger" : u.role === "H" ? " + heal" : u.role === "V" ? " + armor" : "")})]);
+    return card; })));
+  el.bar.textContent = ""; el.msg.textContent = B.msg || "";
+  if (B.over) { const o = B.over;
+    box.appendChild(h("div", {class:"chap"}, [h("div", {class:"nm", text: o.win ? bz.name + " falls!" : "The party is routed."}),
+      h("div", {class:"muted", text:(o.win ? (o.recruit ? bz.name + " kneels and joins your roster as a legendary hero. " : o.dup ? "You already command " + bz.name + "; its hearts grow by one. " : o.weekly ? "Weekly victory. " : "Victory, but the weekly chest was already taken. ") + (o.orbs ? "◆ " + o.orbs + " orbs. " : "") : "No reward. ") + "Answered " + o.right + " of " + o.total + " in " + o.rounds + " rounds." + (o.fell.length ? " Lost: " + o.fell.join(", ") + "." : "")}),
+      h("div", {class:"row"}, [h("button", {class:"go", text:"World map", on:{click:() => { B = null; go("world"); }}}), h("button", {text:"Roster", on:{click:() => { B = null; go("roster"); }}})])]));
+    return; }
+  if (B.phase === "player" && !Q) {
+    el.bar.appendChild(h("button", {class:"go", text:"End round", disabled:!B.units.some(u => !u.out && !u.acted) && false, on:{click:() => { B.units.forEach(u => { u.acted = true; }); bossPhase(); }}}));
+    el.bar.appendChild(h("button", {text: armed === "retreat" ? "Click again to retreat" : "Retreat", on:{click:() => { if (armed === "retreat") { armed = null; finishBoss(false); } else { armed = "retreat"; drawBoss(); } }}}));
+    el.msg.textContent = B.msg || "Click a hero to attack: a correct answer deals its hit; a wrong one lets " + bz.name + " counter with a strike you must parry with a second question. When everyone has acted, the boss attacks the hero with the fewest hearts" + (bz.rage ? " twice" : "") + ".";
+  }
+}
 /* ---------- finishing ---------- */
 function finishRematch(){
   const ex = B.ex, ids = B.ids, c = B.c; let ok = 0; const miss = [];
@@ -775,6 +978,10 @@ function finishExam(){
   if (B.rematch) return finishRematch();
   const ex = B.ex, ids = B.ids, c = B.c; let ok = 0; ids.forEach((id, i) => { if (ex.a[i] === CARDS[id].a) ok++; });
   ex.done = true; ex.score = ok; ex.date = Date.now(); ex.chest = false; ex.orbs = Math.floor(ok / 3) + (ok / ids.length >= 0.9 ? 2 : 0); ex.fell = (B.fell || []).slice();
+  ex.mission = B.mission; ex.bonus = 0; ex.mnote = "";
+  if (B.esc) { if (B.esc.done) { ex.bonus = 2 + B.esc.hp; ex.mnote = "Escort: the courier was delivered with ♥" + B.esc.hp + "."; } else if (B.esc.dead) ex.mnote = "Escort: the courier fell."; else { ex.bonus = 1 + B.esc.hp; ex.mnote = "Escort: the road was cleared before the courier reached the gate (♥" + B.esc.hp + ")."; } }
+  if (B.goal) { if (B.goal.done) { ex.bonus = B.goal.done <= 4 ? 5 : 4; ex.mnote = "Reach: banner taken on turn " + B.goal.done + "."; } else ex.mnote = "Reach: the banner was not taken in " + B.goal.limit + " turns."; }
+  ex.orbs += ex.bonus;
   save(); B = null; Q = null; go("after", {ch:c.id});
 }
 function finishSkirmish(win){
@@ -828,6 +1035,7 @@ function after(){
     h("h2", {text:"Aftermath: " + c.name}),
     h("div", {class:"big", text:ex.score + "/" + n + "  (" + Math.round(100 * ex.score / n) + "%)"}),
     h("div", {class:"muted", text:"Time " + fmt(ex.t) + ((ex.fell || []).length ? " · Lost: " + ex.fell.map(fname).join(", ") : " · No hero lost")}),
+    ex.mnote ? h("div", {class:"fb" + (ex.bonus ? "" : " bad"), text:ex.mnote + (ex.bonus ? " Bonus ◆ " + ex.bonus + " added to the chest." : " No bonus.")}) : null,
     chestPanel(c),
     h("h3", {text:"Score by learning objective"}),
     tbl(["Objective", "Right", "Of"], Object.keys(byLo).sort((a, b) => a - b).map(k => ["LO " + k, byLo[k][0], byLo[k][1]])),
@@ -848,6 +1056,7 @@ function heroCard(hid, opts){
     h("img", {src:hr.img, alt:""}), h("span", {class:"hn", text: show ? (own ? nm(hid) : hr.n) : "???"}), h("span", {class:"hc", text: show ? (own && own.nm ? hr.n + ", " + hr.c : hr.c) : RAR[hr.r]}), h("span", {class:"stars", text:STARS[hr.r]}),
     show ? h("span", {class:"hc", text:ro.n + " · " + hr.el + " · " + (own ? hearts(maxHalves(hid)) : "♥" + HEARTS[hr.r])}) : null,
     show ? h("span", {class:"hc", text:"Range " + ro.rng + " · Move " + ro.mv + " · " + elName(hr.el)}) : null,
+    show && sigOf(hr) ? h("span", {class:"hc sig", title:sigOf(hr).d, text:"✦ " + sigOf(hr).n}) : null,
     own ? h("span", {class:"pixs", text:"Lv " + lv(hid) + (own.mg ? " +" + own.mg : "") + (opts.team ? " · Team" : "")}) : null]);
 }
 function missTable(rows){ return tbl(["Q", "Question", "You", "Correct", "Rule", "Page"], rows.map(x => [x.i + 1, x.card.q, (x.timeout || x.pick == null || x.pick < 0 ? "Timed out" : L[x.pick] + ". " + x.card.o[x.pick]) + (x.flag ? " (" + x.flag + ")" : ""), L[x.card.a] + ". " + x.card.o[x.card.a], x.card.r, x.card.p])); }
@@ -935,7 +1144,10 @@ function roster(){
     h("p", {class:"muted", text:"To use a skill, click a hero that has not acted yet and press Skill (S). A skill does not use up the hero's action."}),
     h("h3", {text:"Elements"}),
     h("p", {class:"muted", text:"Each hero's element fires when that hero answers correctly. Tiles appear where the foe stood and last 3 turns. Shadowstep and Earthshaper only fire on the hero's own attack, once per turn. A Caster's effect is stronger: tiles last 5 turns, Shock lasts one more phase, Tide pushes 3 tiles, Hourglass adds 25 seconds, Salvage drops 2 times in 5."}),
-    tbl(["Element", "Effect", "What it does"], ["Fire", "Ice", "Nature", "Light", "Storm", "Water", "Sand", "Shadow", "Earth", "Steam"].map(e => [e, elName(e), elDesc(e)]))]);
+    tbl(["Element", "Effect", "What it does"], ["Fire", "Ice", "Nature", "Light", "Storm", "Water", "Sand", "Shadow", "Earth", "Steam"].map(e => [e, elName(e), elDesc(e)])),
+    h("h3", {text:"Signatures"}),
+    h("p", {class:"muted", text:"Most heroes have a signature: a way their skill and element work together. It is marked ✦ on the hero card. Home ground: each map has a home element; heroes of that element earn half again as much experience there and their skills recharge a turn faster."}),
+    tbl(["Role", "Element", "Signature", "What it does"], Object.keys(SIG).map(k => [ROLE[k.split("|")[0]].n, k.split("|")[1], SIG[k].n, SIG[k].d]))]);
 }
 function redeem(raw){
   const code = String(raw || "").trim().toUpperCase().replace(/\s+/g, ""), m = /^(\d{1,3})-([A-Z0-9]{1,12})-([A-Z0-9]{5})$/.exec(code);
@@ -1004,14 +1216,15 @@ function worlds(){
     return card; })));
   return box;
 }
-const VIEWS = {worlds, world, brief, battle, after, sum, rsum, vsum, roster, summon, report};
+const VIEWS = {worlds, world, boss:bossView, brief, battle, after, sum, rsum, vsum, roster, summon, report};
 
 /* ---------- input and timer ---------- */
 document.addEventListener("keydown", e => {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   const tg = e.target && e.target.tagName; if (tg === "TEXTAREA" || tg === "INPUT") return;
-  if (!B || V.name !== "battle") return;
+  if (!B || (V.name !== "battle" && V.name !== "boss")) return;
   const k = e.key.toLowerCase();
+  if (B.mode === "boss" && !Q) return;
   if (Q) {
     if (Q.done) { if (k === "enter" || k === " ") { e.preventDefault(); contQ(); } return; }
     if (B.mode === "exam" && k === "u") { e.preventDefault(); setFlag("unsure"); return; }
