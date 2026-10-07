@@ -77,3 +77,13 @@ cd docs && python3 -m http.server 8765
 ```
 
 then open http://localhost:8765/. The page needs to be served (not opened as a file) because it fetches JSON.
+
+## Shared library (Firestore)
+
+Shared packs and question banks live in a Firebase project (`lancer-hero`, free Spark plan). The web config is
+in `docs/data/index.json` under `firebase` (public by design). Access is controlled by `firestore.rules`:
+anyone can read, writing needs the **guild passphrase**, whose SHA-256 hash is in the rules. Players enter the
+passphrase once under Guild Packs; it is kept in their browser. To rotate it: pick a new phrase, put
+`sha256(phrase)` in `firestore.rules`, paste the file into Firebase console → Firestore → Rules → Publish.
+Storage layout: `packs/{id}` meta (`name, n, author, chunks, rev, by, key, deleted`) and `packs/{id}/chunks/cNNNN` (`d`).
+Deleting a shared pack writes `deleted: true` (clients hide it); a true delete is allowed only to the uploader's uid.

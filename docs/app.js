@@ -178,37 +178,45 @@ function registerPack(p, shared){
   if (!CH[id]) D.chapters.push(c); else D.chapters[D.chapters.findIndex(x => x.id === id)] = c;
   CH[id] = c; PACKS[p.id] = {id:p.id, name:c.name, n:ids.length, author:c.author, shared:!!shared};
 }
-/* shared pack library: the artifact's db, read by everyone who opens the game, written by the owner (or an invited editor) */
-let SDB = null, canShare = null; const SHARED = {}, CHUNK = 80000;
+/* shared pack library: Firestore (config in index.json "firebase"). Everyone signed in anonymously can read; writing needs the guild passphrase,
+   whose SHA-256 is checked by the Firestore rules (see firestore.rules in the repo). A pack is stored as meta doc + text chunks. */
+let SDB = null, FS = null, canShare = null, UID = null; const SHARED = {}, CHUNK = 80000, GKEY = "gr-guild";
+function guildPhrase(){ try { return localStorage.getItem(GKEY) || ""; } catch (e) { return ""; } }
+function setGuildPhrase(v){ try { if (v) localStorage.setItem(GKEY, v); else localStorage.removeItem(GKEY); } catch (e) {} canShare = !!v; }
+async function sha256(t){ const b = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t)); return Array.from(new Uint8Array(b)).map(x => x.toString(16).padStart(2, "0")).join(""); }
 async function sharedInit(){
   try {
-    if (!window.claude || !window.claude.use) return;
-    SDB = await window.claude.use("db"); if (!SDB) return;
-    const user = await window.claude.use("user"); if (user && user.can) { try { canShare = await user.can("data.write"); } catch (e) {} }
-    SDB.collection("packs").limit(200).onSnapshot(snap => { syncShared(snap); }, () => {});
+    if (!D.firebase) return;
+    const ver = "10.14.1", base = "https://www.gstatic.com/firebasejs/" + ver + "/";
+    const [app, auth, fs] = await Promise.all([import(base + "firebase-app.js"), import(base + "firebase-auth.js"), import(base + "firebase-firestore.js")]);
+    const a = app.initializeApp(D.firebase); FS = fs; SDB = fs.getFirestore(a);
+    const u = await auth.signInAnonymously(auth.getAuth(a)); UID = u.user.uid;
+    canShare = !!guildPhrase();
+    fs.onSnapshot(fs.query(fs.collection(SDB, "packs"), fs.limit(300)), snap => { syncShared(snap); }, () => {});
   } catch (e) { SDB = null; }
 }
 async function syncShared(snap){
   const seen = {}; let changed = false;
-  for (const d of snap.docs) { const meta = d.data(); seen[d.id] = true; if (!meta || !meta.chunks || SHARED[d.id] === meta.rev) continue;
-    try { const q = await SDB.collection("packs/" + d.id + "/chunks").limit(1000).get(); if (q.docs.length < meta.chunks) continue;
+  for (const d of snap.docs) { const meta = d.data(); if (!meta || meta.deleted) continue; seen[d.id] = true; if (!meta.chunks || SHARED[d.id] === meta.rev) continue;
+    try { const q = await FS.getDocs(FS.collection(SDB, "packs", d.id, "chunks")); if (q.docs.length < meta.chunks) continue;
       const text = q.docs.slice().sort((x, y) => x.id < y.id ? -1 : 1).slice(0, meta.chunks).map(x => (x.data() || {}).d || "").join("");
-      const p = JSON.parse(text); if (validatePack(p) || p.id !== d.id) continue; registerPack(p, true); SHARED[d.id] = meta.rev; changed = true; } catch (e) {} }
+      const p = JSON.parse(text); if (validatePack(p) || p.id !== d.id) continue; registerPack(p, true); PACKS[p.id].uid = meta.by; SHARED[d.id] = meta.rev; changed = true; } catch (e) {} }
   for (const id in SHARED) if (!seen[id]) { delete SHARED[id]; if (PACKS[id] && PACKS[id].shared) { unregisterPack(id); changed = true; } }
   if (changed && V.name === "world" && !B) render();
 }
 async function sharePack(p){
-  if (!SDB || canShare === false) return "denied";
-  const text = JSON.stringify(p), n = Math.ceil(text.length / CHUNK), col = SDB.collection("packs/" + p.id + "/chunks");
+  if (!SDB) return "offline"; const ph = guildPhrase(); if (!ph) return "nokey";
+  const key = await sha256(ph), text = JSON.stringify(p), n = Math.ceil(text.length / CHUNK);
+  if (n > 40) return "big";
   try {
-    for (let i = 0; i < n; i++) await col.doc("c" + String(i).padStart(4, "0")).set({d:text.slice(i * CHUNK, (i + 1) * CHUNK)});
-    const old = await col.limit(1000).get(); for (const d of old.docs) if (parseInt(d.id.slice(1), 10) >= n) await col.doc(d.id).delete();
-    await SDB.doc("packs/" + p.id).set({name:String(p.name || p.id), n:p.questions.length, author:String(p.author || ""), chunks:n, rev:Date.now()});
-    return "shared";
-  } catch (e) { return e && e.code === "quota_exceeded" ? "full" : "denied"; }
+    for (let i = 0; i < n; i++) await FS.setDoc(FS.doc(SDB, "packs", p.id, "chunks", "c" + String(i).padStart(4, "0")), {d:text.slice(i * CHUNK, (i + 1) * CHUNK), key});
+    await FS.setDoc(FS.doc(SDB, "packs", p.id), {name:String(p.name || p.id).slice(0, 80), n:p.questions.length, author:String(p.author || "").slice(0, 60), chunks:n, rev:Date.now(), by:UID, key, deleted:false});
+    SHARED[p.id] = null; return "shared";
+  } catch (e) { return e && /permission/i.test(String(e.code || e.message)) ? "denied" : "error"; }
 }
 async function unsharePack(pid){
-  if (!SDB) return; try { const col = SDB.collection("packs/" + pid + "/chunks"), q = await col.limit(1000).get(); await SDB.doc("packs/" + pid).delete(); for (const d of q.docs) await col.doc(d.id).delete(); } catch (e) {}
+  if (!SDB) return false; const ph = guildPhrase(); if (!ph) return false;
+  try { await FS.setDoc(FS.doc(SDB, "packs", pid), {deleted:true, rev:Date.now(), key:await sha256(ph), by:UID, name:"", n:0, author:"", chunks:0}); return true; } catch (e) { return false; }
 }
 function unregisterPack(pid){ dropBank(pid); const id = "pk_" + pid; const k = D.chapters.findIndex(x => x.id === id); if (k >= 0) D.chapters.splice(k, 1); delete CH[id]; delete PACKS[pid]; }
 /* ---------- views ---------- */
@@ -301,9 +309,10 @@ function importFiles(input, asBank, defCh){
     if (asBank) { p.bank = true; if (!p.name) p.name = p.id; p.questions.forEach(q => { if (!(CH[q.chapter] && !CH[q.chapter].imported) && defCh) q.chapter = defCh; }); }
     else if (p.bank) delete p.bank;
     const local = idbPut(p).then(() => true, () => false);
-    return local.then(kept => { registerPack(p); return sharePack(p).then(r => { if (r === "shared") { PACKS[p.id].shared = true; }
+    return local.then(kept => { registerPack(p); return sharePack(p).then(r => { if (r === "shared") { PACKS[p.id].shared = true; PACKS[p.id].uid = UID; }
       const by = PACKS[p.id].by, where = by ? " Sorted into: " + Object.keys(by).map(k => k + " " + by[k]).join(", ") + "." : "";
-      msgs.push(f.name + ": " + (asBank ? "added " + p.questions.length + " questions to the bank." + where + " " : "imported " + p.questions.length + " questions. ") + (r === "shared" ? "Saved to the shared library, so everyone who opens this game gets it." : r === "full" ? "The shared library is full, so it is saved on this device only." : kept ? "Saved on this device only. Only the game's owner can add to the shared library, so send the file to the owner to share it." : "Kept for this visit only (browser storage refused it).")); }); }); })))
+      const tail = r === "shared" ? "Shared with the guild: everyone who opens the game gets it." : r === "nokey" ? "Saved on this device only. Enter the guild passphrase below to share it with everyone." : r === "denied" ? "Saved on this device only: the guild passphrase is wrong." : r === "big" ? "Saved on this device only: too large to share (shrink the images)." : r === "offline" ? "Saved on this device only (the shared library could not be reached)." : kept ? "Saved on this device only." : "Kept for this visit only (browser storage refused it).";
+      msgs.push(f.name + ": " + (asBank ? "added " + p.questions.length + " questions to the bank." + where + " " : "imported " + p.questions.length + " questions. ") + tail); }); }); })))
     .then(() => { note = msgs.join(" "); const n = note; render(); note = n; });
 }
 function importPanel(){
@@ -314,7 +323,10 @@ function importPanel(){
   const bfile = h("input", {type:"file", accept:".json,application/json", multiple:true, "aria-label":"Question bank files"});
   bfile.addEventListener("change", () => importFiles(bfile, true, sel.value));
   const packs = Object.values(PACKS), extra = D.chapters.reduce((a, c) => a + (c.imported ? 0 : (c.bank || []).length), 0) + (D.misc || []).length;
-  const who = SDB && canShare !== false ? "Files you add here go into the shared library and appear for everyone who opens this game." : SDB ? "Files the owner adds appear here for everyone. Files you add yourself stay in this browser; send them to the owner to share." : "Files stay in this browser.";
+  const who = !SDB ? "Files stay in this browser." : canShare ? "Files you add are shared with the guild and appear for everyone who opens the game." : "Shared guild files appear here for everyone. To share your own, enter the guild passphrase.";
+  const gp = h("input", {type:"password", placeholder:"Guild passphrase", value:guildPhrase(), "aria-label":"Guild passphrase", autocomplete:"off"});
+  const gbtn = h("button", {text:guildPhrase() ? "Change" : "Save", on:{click:() => { setGuildPhrase(gp.value.trim()); note = gp.value.trim() ? "Passphrase saved on this device. New uploads will be shared." : "Passphrase cleared. Uploads stay on this device."; const n = note; render(); note = n; }}});
+  const guildRow = SDB ? h("div", {class:"row"}, [gp, gbtn, h("span", {class:"pixs", text:"Needed only to share or delete shared files. Ask the game's owner for it."})]) : null;
   return h("div", {class:"chap"}, [
     h("div", {class:"nm"}, ["Question bank", h("span", {class:"tag g", text:extra + " extra questions"})]),
     h("div", {class:"muted", text:"Upload questions in bulk. They are sorted into lectures by each question's chapter field and feed rematches and village defense; first battles do not change. Any AI can turn raw questions into a bank file with the prompt below. " + who}),
@@ -322,9 +334,11 @@ function importPanel(){
     h("div", {class:"nm", text:"Import quiz packs"}),
     h("div", {class:"muted", text:"A pack is one file with a lecture's questions, answer key, tables and images. It becomes its own battle on this map. Anyone can make one with their own AI using the prompt below."}),
     h("div", {class:"row"}, [file, copyBtn(() => D.packPrompt, "Copy pack-maker prompt")]),
+    guildRow,
     note ? h("div", {class:"fb", text:note}) : null,
     packs.length ? h("div", {class:"row"}, packs.map(p => { const label = (p.bank ? "bank: " : "pack: ") + p.name + (p.bank ? " (" + p.n + ")" : "");
-      return p.shared && canShare === false ? h("span", {class:"emb", text:"Shared " + label}) : h("button", {text: armed === "del:" + p.id ? "Click again to delete " + p.name + (p.shared ? " for everyone" : "") : "Delete " + (p.shared ? "shared " : "") + label, on:{click:() => { if (armed === "del:" + p.id) { const sh = p.shared; idbDel(p.id).catch(() => {}).then(() => sh ? unsharePack(p.id) : null).then(() => { delete SHARED[p.id]; unregisterPack(p.id); armed = null; render(); }); } else { armed = "del:" + p.id; render(); } }}}); })) : null]);
+      const mine = !p.shared || p.uid === UID || canShare;
+      return !mine ? h("span", {class:"emb", text:"Shared " + label + (p.author ? " by " + p.author : "")}) : h("button", {text: armed === "del:" + p.id ? "Click again to delete " + p.name + (p.shared ? " for everyone" : "") : "Delete " + (p.shared ? "shared " : "") + label, on:{click:() => { if (armed === "del:" + p.id) { const sh = p.shared; idbDel(p.id).catch(() => {}).then(() => sh ? unsharePack(p.id) : true).then(ok => { if (sh && !ok) { note = "Could not delete the shared copy (check the guild passphrase); removed from this device only."; } delete SHARED[p.id]; unregisterPack(p.id); armed = null; const n = note; render(); note = n; }); } else { armed = "del:" + p.id; render(); } }}}); })) : null]);
 }
 function brief(){
   const c = CH[V.ch], ex = exam(c);

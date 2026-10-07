@@ -1,0 +1,29 @@
+rules_version = '2';
+// Lancer-Hero shared library. Reads: any signed-in (anonymous) player. Writes: only requests that carry the guild key,
+// the SHA-256 of the guild passphrase. To change the passphrase, replace the hash below and tell the players the new phrase.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function guild() { return signedIn() && request.resource.data.key == "2a76ae7ce25529005449b78fc108f9c5f1b50d3d4aae514139bde528cd250ff6"; }
+    match /packs/{pid} {
+      allow read: if signedIn();
+      allow create, update: if guild()
+        && pid.matches('^[A-Za-z0-9_-]{1,40}$')
+        && request.resource.data.name is string && request.resource.data.name.size() <= 80
+        && request.resource.data.author is string && request.resource.data.author.size() <= 60
+        && request.resource.data.chunks is int && request.resource.data.chunks >= 0 && request.resource.data.chunks <= 40
+        && request.resource.data.n is int && request.resource.data.n >= 0 && request.resource.data.n <= 2000
+        && request.resource.data.rev is int
+        && request.resource.data.deleted is bool
+        && request.resource.data.by == request.auth.uid;
+      allow delete: if signedIn() && resource.data.by == request.auth.uid;
+      match /chunks/{cid} {
+        allow read: if signedIn();
+        allow create, update: if guild() && cid.matches('^c[0-9]{4}$')
+          && request.resource.data.d is string && request.resource.data.d.size() <= 100000;
+        allow delete: if signedIn();
+      }
+    }
+    match /{other=**} { allow read, write: if false; }
+  }
+}
