@@ -1,0 +1,79 @@
+# Grand Rounds
+
+A tactics-style study game: every lecture is a battle, every attack is a multiple-choice question, and the
+village stands or falls on what you know. Built for Georgetown SOM block exams; designed to grow one chapter
+at a time across the whole MD curriculum.
+
+The site is served from `docs/` by GitHub Pages. Everything in `docs/` is static: no server, no accounts.
+Progress lives in the player's browser (local storage) and can be moved between devices with a save code.
+
+## Layout
+
+```
+docs/                 the playable site (GitHub Pages root)
+  index.html          page shell: loads app.css and app.js
+  app.js              the game engine (hand-edited)
+  app.css             styles (hand-edited)
+  data/index.json     title, realms, chapter list (ids only), heroes, prompts, image map, preload list
+  data/ch/<id>.json   one file per chapter: {cards:{cid:card}, brief:html}; loaded on demand
+  h/ m/ u/ q/         hero sprites, world maps, utility sprites, question images
+tools/
+  add_chapter.py      add or replace one chapter from a quiz folder (see below)
+  chest.py            compute the debrief chest code for a campaign-report seed
+src/
+  briefs/<id>.md      markdown source of each chapter's in-game tables (compiled into the chapter file)
+  prompts/*.md        the pack-maker, bank-maker and tutor prompts shown in the game
+story/
+  bible.md            setting, factions, hero voices, chapter beats (the reference every session writes from)
+```
+
+## How the data loads
+
+`app.js` fetches `data/index.json` first, then every chapter whose realm is listed in `index.preload`.
+Chapters in other realms load the first time the player opens that realm or chapter. This keeps the first
+load small as the game grows: when a new block starts, put its realm in `preload` and take old ones out.
+
+A card looks like this:
+
+```json
+{"q":"stem","o":["A","B","C","D"],"a":2,"r":"one-line rule shown after answering","p":862,"lo":"LO 3","img":"3f2a9c1e","alt":""}
+```
+
+`a` is the index of the correct option. `img` is a key into `index.imgs` (set by `add_chapter.py`).
+
+## Adding a lecture (one chapter)
+
+1. Build a quiz folder with `quiz.json` and `key.json` in the format the Exam 3 quizzes used
+   (`quiz.json` = `{"questions":[{"stem","options","image"?,"alt"?}]}`, `key.json` = `[{"n","correct","answer","rule","page","lo"?}]`),
+   plus any question images, and a tables markdown file for the brief.
+2. Run, from the repo root:
+
+   ```
+   python3 tools/add_chapter.py --id met9 --name "Met 9: Nucleotide Metabolism" --short "Met 9" \
+       --realm 1 --pos 40,60 --quiz path/to/quiz_met9 --brief src/briefs/met9.md
+   ```
+
+   Re-running with the same `--id` replaces the chapter; `--bank` dirs add questions that only rematches
+   and the village draw from; `--exclude 3,7` leaves out question numbers.
+3. Commit and push. Pages redeploys in about a minute.
+
+Rules for questions (from the player): choices brief and length-matched; the right answer never longer or
+carrying extra detail; one fact per question; histology questions image-heavy with answer labels censored;
+most histology questions second-order (what the structure does), not plain identification.
+
+## Saves and codes
+
+Saves are versioned (`SAVE_V` in `app.js`). When the save shape changes, bump `SAVE_V` and add one
+function to `MIGRATIONS` that upgrades version k to k+1; never edit an old one. Old save codes keep loading.
+
+Chest codes: `python3 tools/chest.py MET5-22-431` (seed is printed in the campaign report).
+Gift and revive codes are checked the same way: `chest.py GIFT-<amount>-<TAG>` and
+`chest.py REVIVE-<level>-<HERONAME>`; the player enters `GIFT-<amount>-<TAG>-<CHECK>`.
+
+## Local testing
+
+```
+cd docs && python3 -m http.server 8765
+```
+
+then open http://localhost:8765/. The page needs to be served (not opened as a file) because it fetches JSON.
