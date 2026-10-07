@@ -66,7 +66,7 @@ a{color:var(--mana)}
 .hud b{color:var(--ink);font-weight:400}
 .field{position:relative;width:100%;aspect-ratio:12/7;border:2px solid var(--line);border-radius:4px;overflow:hidden;background-size:330% auto;image-rendering:pixelated;user-select:none}
 .field::before{content:"";position:absolute;inset:0;background:
-  linear-gradient(#0d102280,#0d102280),
+  linear-gradient(#0d102266,#0d102266),
   repeating-linear-gradient(90deg,transparent 0,transparent calc(8.3333% - 1px),#ffffff26 calc(8.3333% - 1px),#ffffff26 8.3333%),
   repeating-linear-gradient(0deg,transparent 0,transparent calc(14.2857% - 1px),#ffffff26 calc(14.2857% - 1px),#ffffff26 14.2857%)}
 .field.paused > *{visibility:hidden}
@@ -252,3 +252,4 @@ select{font:inherit;background:#10131f;color:var(--ink);border:1px solid var(--l
 .bossrow>img{width:64px;height:64px;object-fit:contain;image-rendering:pixelated;flex:none}
 .bossrow>div{flex:1;min-width:0}
 .hero .sig{color:var(--gold)}
+.wmap.soon{filter:saturate(.6) brightness(.8)}

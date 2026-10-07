@@ -14,7 +14,7 @@ INDEX = os.path.join(ROOT, "docs", "data", "index.json")
 
 ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 ap.add_argument("--world", required=True); ap.add_argument("--name", required=True)
-ap.add_argument("--map", default="m/map1.jpg"); ap.add_argument("--village", default="86,74"); ap.add_argument("--all", action="store_true")
+ap.add_argument("--map", default=None, help="map image; default: the world's next unused map"); ap.add_argument("--village", default="86,74"); ap.add_argument("--all", action="store_true")
 a = ap.parse_args()
 
 d = json.load(open(INDEX))
@@ -22,7 +22,16 @@ w = next((x for x in d["worlds"] if x["id"] == a.world), None)
 if not w:
     raise SystemExit("no world with id " + a.world + "; add it to index.json first")
 d["realms"].append(a.name)
-info = {"map": a.map, "village": [float(x) for x in a.village.split(",")]}
+used = {d["realmInfo"][i].get("map") for i in w["realms"] if i < len(d.get("realmInfo", []))}
+mp = a.map or next((m for m in w.get("maps", []) if m not in used), "m/map1.jpg")
+info = {"map": mp, "village": [float(x) for x in a.village.split(",")]}
+if w.get("fields"):
+    info["fields"] = w["fields"]
+if w.get("el"):
+    info["el"] = w["el"]
+pins = (w.get("pins") or {}).get(mp.split("/")[-1].rsplit(".", 1)[0])
+if pins:
+    print("node positions available on this map (use with add_chapter --pos):", pins)
 if a.all:
     info["villageAll"] = True
 d.setdefault("realmInfo", []).append(info)

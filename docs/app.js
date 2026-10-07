@@ -328,7 +328,8 @@ function world(){
   const box = h("div", {class:"list"}), W = curWorld(), wr = worldRealms(W);
   box.appendChild(h("div", {class:"row wname"}, [h("button", {text:"‹ Worlds", on:{click:() => go("worlds")}}), h("span", {class:"wttl", text:W.name})]));
   box.appendChild(h("div", {class:"row"}, wr.filter(i => D.realms[i]).map(i => h("button", {class:V.realm === i ? "on" : "", text:D.realms[i], on:{click:() => go("world", {realm:i, focus:null})}}))));
-  if (!W.realms.length && V.realm === PACKR) box.appendChild(h("div", {class:"chap"}, [h("div", {class:"nm", text:"Nothing here yet"}), h("div", {class:"muted", text:"Maps for this chapter appear as lectures are added. Guild packs are available everywhere."})]));
+  if (!W.realms.length && V.realm === PACKR) { box.appendChild(h("div", {class:"chap"}, [h("div", {class:"nm", text:"Nothing here yet"}), h("div", {class:"muted", text:"Maps for this chapter appear as lectures are added. Guild packs are available everywhere."})]));
+    if (W.maps && W.maps.length) { const pv = h("div", {class:"wmap soon", role:"img", "aria-label":"Preview of this chapter's first map"}); pv.style.backgroundImage = "url(" + W.maps[0] + ")"; box.appendChild(pv); } }
   if (realmNote) { box.appendChild(h("div", {class:"fb", text:realmNote})); realmNote = ""; }
   if (V.realm !== PACKR && W.realms.length && W.realms[0] === V.realm) { const bp = bossPanel(W); if (bp) box.appendChild(bp); }
   if (V.realm !== PACKR) { const rs = realmState(V.realm), he = homeEl(V.realm); if (rs.of) box.appendChild(h("div", {class:"pixs", text: (S.rw[V.realm] ? "Realm cleared. ◆ " + rs.prize + " collected." : rs.n + " of " + rs.of + " battles cleared (green). Clear them all for ◆ " + rs.prize + ".") + (he ? " Home element: " + he + ". " + he + " heroes earn half again as much experience here and their skills recharge a turn faster." : "")})); }
@@ -702,8 +703,10 @@ function hurt(u, halves){
 function battle(){
   const c = B.c, ex = B.ex, el = {pcs:{}};
   el.timer = h("b", {text: ex ? fmt(ex.t) : ""}); el.turn = h("b"); el.left = h("b"); el.ph = h("b"); el.vh = h("b"); el.buff = h("span", {class:"buff"});
-  el.field = h("div", {class:"field map" + (c.realm === 2 ? 1 : c.realm)});
-  el.field.style.backgroundPosition = c.pos[0] + "% " + c.pos[1] + "%";
+  el.field = h("div", {class:"field"});
+  const fl = (RI[c.realm] && RI[c.realm].fields) || [];
+  if (fl.length) { el.field.style.backgroundImage = "url(" + fl[hash(c.id + "|field") % fl.length] + ")"; el.field.style.backgroundSize = "cover"; el.field.style.backgroundPosition = "center"; el.field.style.imageRendering = "auto"; }
+  else { el.field.style.backgroundImage = "url(" + ((RI[c.realm] && RI[c.realm].map) || "m/map1.jpg") + ")"; el.field.style.backgroundPosition = c.pos[0] + "% " + c.pos[1] + "%"; }
   el.tl = h("div"); el.field.appendChild(el.tl);
   el.hl = h("div"); el.field.appendChild(el.hl);
   if (B.vil) { el.vt = h("div", {class:"vtile", title:"The village. A foe that walks in costs it a heart."}, [h("img", {src:"u/village.png", alt:"Village"}), h("span")]); el.field.appendChild(el.vt); }
