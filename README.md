@@ -27,6 +27,17 @@ story/
   bible.md            setting, factions, hero voices, chapter beats (the reference every session writes from)
 ```
 
+## Worlds, realms, chapters
+
+The game opens on a **worlds menu**: one world per chapter of the curriculum (`index.worlds`: id, name, sub, element,
+cover image in `docs/w/`, and the list of realm indices it contains). A **realm** is one map inside a world
+(`index.realms[i]` is its name; `index.realmInfo[i]` holds its map image, village position, `villageAll` for a
+whole-world village with optional exam `weights`, or `packs: true` for the Guild Packs realm, which every world shows).
+A **chapter** is one lecture: a node on a realm's map. Heroes, orbs and the shared library are global.
+
+Adding a block: add a world entry to `index.json`, then `tools/add_realm.py --world <id> --name "..."` for each map,
+then `tools/add_chapter.py --realm <index> ...` for each lecture.
+
 ## How the data loads
 
 `app.js` fetches `data/index.json` first, then every chapter whose realm is listed in `index.preload`.

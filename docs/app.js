@@ -18,14 +18,24 @@ function loadChapter(id){
   return LOADING[id];
 }
 function ensure(ids){ return Promise.all(ids.filter(id => CH[id] && !CH[id].imported && !LOADED[id]).map(loadChapter)); }
-function realmChapters(r){ return D.chapters.filter(c => !c.imported && (r === 3 ? c.realm !== 2 : c.realm === r)).map(c => c.id); }
+function realmChapters(r){ const w = (D.realmInfo || [])[r] && D.realmInfo[r].villageAll ? (D.worlds || []).find(x => x.realms.includes(r)) : null; return D.chapters.filter(c => !c.imported && (w ? w.realms.includes(c.realm) : c.realm === r)).map(c => c.id); }
 const HERO = {}; D.heroes.forEach(x => HERO[x.id] = x);
 HERO.militia = {id:"militia", n:"Militia", c:"Recruit", r:0, role:"M", el:null, img:"u/militia.png"};
 const CH = {}; D.chapters.forEach(c => CH[c.id] = c);
+const RI = D.realmInfo || [], WORLDS = D.worlds || [{id:"all", name:D.title || "Campaign", sub:"", realms:D.realms.map((_, i) => i).filter(i => !(RI[i] && RI[i].packs))}];
+const PACKR = RI.findIndex(r => r && r.packs);            // the realm index of Guild Packs (shared by every world)
+function worldOfRealm(r){ return WORLDS.find(w => w.realms.includes(r)) || null; }
+function worldById(id){ return WORLDS.find(w => w.id === id) || WORLDS[0]; }
+function curWorld(){ return worldById(V.world || (S && S.world)); }
+function worldRealms(w){ return w.realms.concat(PACKR >= 0 ? [PACKR] : []); }
+function villagePos(r){ return RI[r] && RI[r].village; }
+function villageAll(r){ return !!(RI[r] && RI[r].villageAll); }
+function worldChapters(w){ return D.chapters.filter(c => !c.imported && w.realms.includes(c.realm)); }
+function worldState(w){ const chs = worldChapters(w).filter(c => c.exam); return {n: chs.filter(c => chapStatus(c).cls === "clear").length, of: chs.length}; }
 try { await ensure(D.chapters.filter(c => (D.preload || []).includes(c.realm)).map(c => c.id)); }
 catch (e) { document.getElementById("boot").textContent = "Could not load the question data (" + e.message + "). Check your connection and reload."; return; }
 const KEY = D.saveKey || "exam3-campaign-v2", L = "ABCDE", COLS = 12, ROWS = 7, FIELD = 14, SUMMON = 10, ENEMY_SECS = 30, PLAYER_SECS = 60, ENEMY_ATTACKS = 5;
-const REMATCH_N = 30, LONG_N = 50, VIL = {rounds:8, wave:7, hearts:5, cap:16, x:1, y:3}, VPOS = {0:[86, 74], 1:[90, 52], 3:[50, 82]};
+const REMATCH_N = 30, LONG_N = 50, VIL = {rounds:8, wave:7, hearts:5, cap:16, x:1, y:3};
 const RAR = ["Common", "Rare", "Legendary"], STARS = ["★★★", "★★★★", "★★★★★"], HEARTS = [3, 6, 10], ODDS = [0.80, 0.18, 0.02];
 const ROLE = {
   V:{n:"Vanguard", rng:1, mv:3, d:"Armor blocks the first hit each battle"},
@@ -220,15 +230,16 @@ async function unsharePack(pid){
 }
 function unregisterPack(pid){ dropBank(pid); const id = "pk_" + pid; const k = D.chapters.findIndex(x => x.id === id); if (k >= 0) D.chapters.splice(k, 1); delete CH[id]; delete PACKS[pid]; }
 /* ---------- views ---------- */
-let V = {name:"world", realm:0, ch:null, focus:null}, B = null, Q = null, lastSum = null, lastRem = null, lastVil = null, lastPull = null, realmNote = "", armed = null, note = "";
+let V = {name:"worlds", world:null, realm:0, ch:null, focus:null}, B = null, Q = null, lastSum = null, lastRem = null, lastVil = null, lastPull = null, realmNote = "", armed = null, note = "";
 function go(name, extra){
   const nx = Object.assign({}, V, {name}, extra || {});
+  if (name === "world") { const w = worldById(nx.world || S.world); nx.world = w.id; if (S.world !== w.id) { S.world = w.id; save(); } if (!worldRealms(w).includes(nx.realm) || (!(extra && extra.realm != null) && (w.id !== V.world || V.name === "worlds"))) nx.realm = worldRealms(w)[0]; }
   const need = nx.ch && CH[nx.ch] && !LOADED[nx.ch] && !CH[nx.ch].imported ? [nx.ch] : name === "world" && nx.realm != null ? realmChapters(nx.realm).filter(id => !LOADED[id]) : [];
   if (need.length) { note = "Loading…"; render(); ensure(need).then(() => { V = nx; armed = null; note = ""; render(); window.scrollTo(0, 0); }).catch(() => { note = "Could not load that chapter. Check your connection."; render(); }); return; }
   V = nx; armed = null; note = ""; render(); window.scrollTo(0, 0);
 }
 function realmState(r){ const chs = D.chapters.filter(c => c.realm === r && !c.imported); return {n: chs.filter(c => chapStatus(c).cls === "clear").length, of: chs.length, prize: REALM_PRIZE(chs.length)}; }
-function checkRealms(){ [0, 1, 3].forEach(r => { if (!D.realms[r] || S.rw[r]) return; const st = realmState(r); if (st.of && st.n === st.of) { S.rw[r] = Date.now(); S.orbs += st.prize; realmNote = D.realms[r].split(":")[0] + " is fully cleared: ◆ " + st.prize + " orbs collected."; save(); } }); }
+function checkRealms(){ D.realms.forEach((_, r) => { if (RI[r] && RI[r].packs) return; if (!D.realms[r] || S.rw[r]) return; const st = realmState(r); if (st.of && st.n === st.of) { S.rw[r] = Date.now(); S.orbs += st.prize; realmNote = D.realms[r].split(":")[0] + " is fully cleared: ◆ " + st.prize + " orbs collected."; save(); } }); }
 function render(){
   if (!B) checkRealms();
   root.textContent = "";
@@ -240,7 +251,7 @@ function render(){
 }
 function topbar(){
   const acc = S.stats.ans ? Math.round(100 * S.stats.ok / S.stats.ans) + "%" : "-";
-  const tabs = [["world","World"],["roster","Roster"],["summon","Summon"],["report","Report"]];
+  const tabs = [["worlds","Worlds"],["world","Map"],["roster","Roster"],["summon","Summon"],["report","Report"]];
   return h("div", {class:"top"}, [
     h("div", {}, [h("h1", {text:D.title || "Campaign"}),
       h("div", {class:"stats"}, [
@@ -260,24 +271,26 @@ function chapStatus(c){
   return {cls:"done", tag: c.exam ? [ex.score + "/" + c.exam.length, "g"] : ["Graded in chat", "d"], p};
 }
 function world(){
-  const box = h("div", {class:"list"});
-  box.appendChild(h("div", {class:"row"}, [0, 1, 3, 2].filter(i => D.realms[i]).map(i => h("button", {class:V.realm === i ? "on" : "", text:D.realms[i], on:{click:() => go("world", {realm:i, focus:null})}}))));
+  const box = h("div", {class:"list"}), W = curWorld(), wr = worldRealms(W);
+  box.appendChild(h("div", {class:"row wname"}, [h("button", {text:"‹ Worlds", on:{click:() => go("worlds")}}), h("span", {class:"wttl", text:W.name})]));
+  box.appendChild(h("div", {class:"row"}, wr.filter(i => D.realms[i]).map(i => h("button", {class:V.realm === i ? "on" : "", text:D.realms[i], on:{click:() => go("world", {realm:i, focus:null})}}))));
+  if (!W.realms.length && V.realm === PACKR) box.appendChild(h("div", {class:"chap"}, [h("div", {class:"nm", text:"Nothing here yet"}), h("div", {class:"muted", text:"Maps for this chapter appear as lectures are added. Guild packs are available everywhere."})]));
   if (realmNote) { box.appendChild(h("div", {class:"fb", text:realmNote})); realmNote = ""; }
-  if (V.realm !== 2) { const rs = realmState(V.realm); if (rs.of) box.appendChild(h("div", {class:"pixs", text: S.rw[V.realm] ? "Realm cleared. ◆ " + rs.prize + " collected." : rs.n + " of " + rs.of + " battles cleared (green). Clear them all for ◆ " + rs.prize + "."})); }
-  const map = h("div", {class:"wmap map" + (V.realm === 2 ? 1 : V.realm), role:"group", "aria-label":"World map"});
+  if (V.realm !== PACKR) { const rs = realmState(V.realm); if (rs.of) box.appendChild(h("div", {class:"pixs", text: S.rw[V.realm] ? "Realm cleared. ◆ " + rs.prize + " collected." : rs.n + " of " + rs.of + " battles cleared (green). Clear them all for ◆ " + rs.prize + "."})); }
+  const map = h("div", {class:"wmap", role:"group", "aria-label":"World map"}); map.style.backgroundImage = "url(" + ((RI[V.realm] && RI[V.realm].map) || "m/map1.jpg") + ")";
   const chs = D.chapters.filter(c => c.realm === V.realm);
-  if (V.realm === 2) chs.slice().sort((x, y) => x.id < y.id ? -1 : 1).forEach((c, i) => { c.pos = [14 + (i % 5) * 18, 24 + (Math.floor(i / 5) % 4) * 17]; });
+  if (V.realm === PACKR) chs.slice().sort((x, y) => x.id < y.id ? -1 : 1).forEach((c, i) => { c.pos = [14 + (i % 5) * 18, 24 + (Math.floor(i / 5) % 4) * 17]; });
   chs.forEach(c => { const st = chapStatus(c);
     const n = h("button", {class:"node " + st.cls + (V.focus === c.id ? " focus" : ""), on:{click:() => { V.focus = c.id; render(); const el = document.getElementById("ch-" + c.id); if (el) el.scrollIntoView({block:"center"}); }}}, [h("span", {class:"flag"}), h("span", {class:"lbl", text:c.short})]);
     n.style.left = c.pos[0] + "%"; n.style.top = c.pos[1] + "%"; map.appendChild(n); });
-  if (VPOS[V.realm]) { const n = h("button", {class:"node vil", on:{click:() => { const e2 = document.getElementById("ch-vil"); if (e2) e2.scrollIntoView({block:"center"}); }}}, [h("span", {class:"flag"}), h("span", {class:"lbl", text:"Village"})]); n.style.left = VPOS[V.realm][0] + "%"; n.style.top = VPOS[V.realm][1] + "%"; map.appendChild(n); }
+  if (villagePos(V.realm)) { const n = h("button", {class:"node vil", on:{click:() => { const e2 = document.getElementById("ch-vil"); if (e2) e2.scrollIntoView({block:"center"}); }}}, [h("span", {class:"flag"}), h("span", {class:"lbl", text:"Village"})]); n.style.left = villagePos(V.realm)[0] + "%"; n.style.top = villagePos(V.realm)[1] + "%"; map.appendChild(n); }
   D.locked.filter(c => c.realm === V.realm).forEach(c => { const n = h("div", {class:"node lock"}, [h("span", {class:"flag"}), h("span", {class:"lbl", text:c.short})]); n.style.left = c.pos[0] + "%"; n.style.top = c.pos[1] + "%"; map.appendChild(n); });
   box.appendChild(map);
-  if (V.realm === 2) box.appendChild(importPanel());
-  if (VPOS[V.realm]) { const v = S.vil[V.realm] || {n:0, wins:0}, nq = villageIds(V.realm).length, all = V.realm === 3;
+  if (V.realm === PACKR) box.appendChild(importPanel());
+  if (villagePos(V.realm)) { const v = S.vil[V.realm] || {n:0, wins:0}, nq = villageIds(V.realm).length, all = villageAll(V.realm);
     box.appendChild(h("div", {class:"chap", id:"ch-vil"}, [
       h("div", {class:"nm"}, ["Village defense", h("span", {class:"tag " + (v.wins ? "" : "g"), text: v.n ? "Held " + v.wins + " of " + v.n : "New"})]),
-      h("div", {class:"muted", text:"Hold the village for " + VIL.rounds + " rounds while " + VIL.wave + " foes a round march on it. Questions are mixed from " + (all ? "every battle in the game, weighted like the exam (39 histology, 34 biochemistry, 8 anatomy)" : "every battle on this map") + ". Reward for holding: ◆ " + (all ? 20 : 15) + " plus 1 per village heart left."}),
+      h("div", {class:"muted", text:"Hold the village for " + VIL.rounds + " rounds while " + VIL.wave + " foes a round march on it. Questions are mixed from " + (all ? "every battle in this chapter, weighted like the exam" : "every battle on this map") + ". Reward for holding: ◆ " + (all ? 20 : 15) + " plus 1 per village heart left."}),
       h("div", {class:"row"}, [h("button", {class:"go", text:"Defend the village", disabled:!nq, on:{click:() => startVillage(V.realm)}})])])); }
   chs.forEach(c => { const st = chapStatus(c), ex = exam(c), done = c.exam && ex && ex.done;
     const btns = [];
@@ -375,10 +388,12 @@ function startRematch(chId, n){
   newBattle("exam", c, ids, ids.map((_, i) => i), {a:[], f:[], x:[], t:0, done:false, ids});
 }
 function villageIds(r){
-  const chs = D.chapters.filter(c => !c.imported && c.exam && (r === 3 ? c.realm !== 2 : c.realm === r)), need = VIL.rounds * VIL.wave + 30;
+  const w = worldOfRealm(r), chs = D.chapters.filter(c => !c.imported && c.exam && (villageAll(r) && w ? w.realms.includes(c.realm) : c.realm === r)), need = VIL.rounds * VIL.wave + 30;
   const all = fn => shuffle([].concat(...chs.filter(fn).map(bankOf)));
-  if (r !== 3) return all(() => true).slice(0, need);
-  const grp = [[c => c.id === "anat", 8], [c => c.realm !== 1 && c.id !== "anat", 39], [c => c.realm === 1, 34]].map(([fn, w]) => ({ids: all(fn), w}));
+  if (!villageAll(r)) return all(() => true).slice(0, need);
+  // weighting comes from realmInfo[r].weights: [{ch:"anat", w:8}, {realm:0, w:39}, ...]; a chapter named in one group is left out of realm groups. Default: realms weighted equally.
+  const wts = (RI[r] && RI[r].weights) || (w ? w.realms.map(x => ({realm:x, w:1})) : []), named = wts.filter(x => x.ch).map(x => x.ch);
+  const grp = wts.map(x => ({ids: all(c => x.ch ? c.id === x.ch : c.realm === x.realm && !named.includes(c.id)), w:x.w}));
   if ((D.misc || []).length) grp.push({ids: shuffle(D.misc.filter(id => CARDS[id])), w:6});
   const out = [];
   while (out.length < need) { const live = grp.filter(g => g.ids.length); if (!live.length) break;
@@ -388,7 +403,7 @@ function villageIds(r){
 }
 function startVillage(r){
   const ids = villageIds(r); if (!ids.length) return;
-  const c = {id:"vil" + r, name:"Village defense: " + D.realms[r].split(":")[0], realm:r, pos:VPOS[r] || [50, 50], prize: r === 3 ? 20 : 15, village:true};
+  const c = {id:"vil" + r, name:"Village defense: " + D.realms[r].split(":")[0], realm:r, pos:villagePos(r) || [50, 50], prize: villageAll(r) ? 20 : 15, village:true};
   S.sk++; save();
   newBattle("village", c, ids, ids.map((_, i) => i));
 }
@@ -976,7 +991,20 @@ function report(){
       h("button", {text:"Load save code", on:{click:() => { try { const x = JSON.parse(decodeURIComponent(escape(atob(code.value.trim())))); const u = upgrade(x); if (u) { S = u; save(); S = load(); go("world"); } else code.value = "That save code is from an older version of the game."; } catch (e) { code.value = "That code could not be read."; } }}}),
       h("button", {text: armed === "reset" ? "Click again to erase everything" : "Reset all progress", on:{click:() => { if (armed === "reset") { S = fresh(); save(); S = load(); go("world"); } else { armed = "reset"; render(); } }}})])]);
 }
-const VIEWS = {world, brief, battle, after, sum, rsum, vsum, roster, summon, report};
+function worlds(){
+  const box = h("div", {class:"list"});
+  box.appendChild(h("div", {class:"pixs", text:"Choose a chapter. Each one is a world with its own maps; heroes, orbs and the guild library are shared across all of them."}));
+  box.appendChild(h("div", {class:"wgrid"}, WORLDS.map(w => { const st = worldState(w), empty = !w.realms.length;
+    const card = h("button", {class:"wcard" + (S.world === w.id ? " cur" : "") + (empty ? " soon" : ""), on:{click:() => go("world", {world:w.id, focus:null})}}, [
+      h("img", {src:w.img, alt:""}),
+      h("div", {class:"wbody"}, [
+        h("div", {class:"nm"}, [w.name, h("span", {class:"tag " + (empty ? "d" : st.n === st.of ? "" : "g"), text: empty ? "Coming soon" : st.n + " / " + st.of + " cleared"})]),
+        h("div", {class:"muted", text:w.sub || ""}),
+        h("div", {class:"pixs", text:(w.el ? w.el + " world · " : "") + (empty ? "No maps yet" : w.realms.filter(r => D.realms[r]).map(r => D.realms[r].split(":")[0]).join(" · "))})])]);
+    return card; })));
+  return box;
+}
+const VIEWS = {worlds, world, brief, battle, after, sum, rsum, vsum, roster, summon, report};
 
 /* ---------- input and timer ---------- */
 document.addEventListener("keydown", e => {

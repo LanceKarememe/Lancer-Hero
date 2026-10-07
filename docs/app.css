@@ -219,3 +219,15 @@ select{font:inherit;background:#10131f;color:var(--ink);border:1px solid var(--l
 .hud .buff:empty{display:none}
 .clock.bonus i{background:#e8c27a}
 @media (prefers-reduced-motion:reduce){ .tl,.fxf,.pc.pickme,.tl.pick{animation:none} .fxp{animation:none} .fxf{opacity:.5} }
+
+/* worlds menu */
+.wname{align-items:center;gap:12px}
+.wttl{font-family:var(--pix,inherit);font-size:1.05rem;letter-spacing:.04em;text-transform:uppercase}
+.wgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;margin-top:10px}
+.wcard{display:flex;flex-direction:column;padding:0;overflow:hidden;text-align:left;border-radius:8px;cursor:pointer;background:var(--panel,#1a2040);border:1px solid var(--line,#2b3566)}
+.wcard:hover,.wcard:focus-visible{border-color:var(--gold,#e4c15a)}
+.wcard.cur{box-shadow:0 0 0 2px var(--gold,#e4c15a) inset}
+.wcard.soon img{filter:saturate(.35) brightness(.7)}
+.wcard img{display:block;width:100%;aspect-ratio:1/1;object-fit:cover}
+.wcard .wbody{padding:10px 12px 12px;display:flex;flex-direction:column;gap:6px}
+.wcard .nm{display:flex;justify-content:space-between;align-items:center;gap:8px}
